@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
 from universal_runtime.domain.events import (
@@ -54,7 +54,7 @@ class InMemoryEventJournal(EventJournal, EventReplay, EventSubscription):
                     queue.put_nowait(None)
             return event
 
-    async def replay(self, run_id: RunId, *, after_sequence: int = -1) -> Sequence[RuntimeEvent]:
+    async def replay(self, run_id: RunId, *, after_sequence: int = -1) -> tuple[RuntimeEvent, ...]:
         async with self._lock:
             return tuple(
                 e for e in self._events.get(str(run_id), ()) if e.sequence > after_sequence

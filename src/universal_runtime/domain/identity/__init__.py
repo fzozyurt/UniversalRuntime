@@ -36,7 +36,3 @@ __all__ = [
     "WorkerId",
     "WorkspaceId",
 ]
-
-
-def new_identifier() -> str:
-    return str(TypedId.new())

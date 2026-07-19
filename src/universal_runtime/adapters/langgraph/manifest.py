@@ -8,7 +8,16 @@ from universal_runtime.domain.capabilities import (
 )
 
 
-def langgraph_manifest() -> AdapterManifest:
+def langgraph_manifest(
+    *,
+    session_affinity: SessionAffinity = SessionAffinity.NONE,
+    cancellation: bool = True,
+    checkpoint: bool = True,
+    history: bool = True,
+    state_management: bool = True,
+    interrupt: bool = True,
+    resume: bool = True,
+) -> AdapterManifest:
     return AdapterManifest(
         adapter_id="langgraph",
         adapter_version="1",
@@ -16,14 +25,14 @@ def langgraph_manifest() -> AdapterManifest:
         stream_modes=frozenset(StreamMode),
         capabilities=AdapterCapabilities(
             streaming=True,
-            cancellation=True,
-            checkpoint=True,
-            state_management=True,
-            history=True,
-            interrupt=True,
-            resume=True,
+            cancellation=cancellation,
+            checkpoint=checkpoint,
+            state_management=state_management,
+            history=history,
+            interrupt=interrupt,
+            resume=resume,
             subagents=True,
         ),
         identity=IdentityCapabilities(),
-        session_affinity=SessionAffinity.PREFERRED,
+        session_affinity=session_affinity,
     )

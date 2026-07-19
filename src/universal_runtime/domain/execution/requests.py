@@ -12,7 +12,6 @@ from universal_runtime.domain.primitives.json_types import JsonObject, JsonValue
 @dataclass(frozen=True, slots=True)
 class ExecutionRequest:
     identity: ExecutionIdentity
-    assistant_id: str | None = None
     input: JsonValue = None
     command: JsonValue = None
     config: JsonObject = field(default_factory=dict)
@@ -26,9 +25,6 @@ class ExecutionRequest:
     checkpoint_id: str | None = None
 
     def __post_init__(self) -> None:
-        if self.assistant_id is not None and self.assistant_id != str(self.identity.assistant_id):
-            raise ValueError("assistant_id must match identity.assistant_id")
-        object.__setattr__(self, "assistant_id", str(self.identity.assistant_id))
         for name in ("config", "context", "metadata"):
             object.__setattr__(self, name, deepcopy(getattr(self, name)))
 

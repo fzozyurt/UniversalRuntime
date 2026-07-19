@@ -65,6 +65,13 @@ def main() -> None:
     missing_operations = set(EXPECTED_OPERATION_IDS.values()).difference(operation_ids)
     if missing_operations:
         raise SystemExit(f"OpenAPI operation IDs missing: {sorted(missing_operations)}")
+    required_scope_fields = {"contracted", "implemented", "verified", "todo"}
+    if not required_scope_fields.issubset(set(scope)):
+        raise SystemExit(
+            "compatibility scope must contain contracted, implemented, verified and todo"
+        )
+    if not set(scope.get("verified", [])).issubset(set(scope.get("implemented", []))):
+        raise SystemExit("verified compatibility entries must be implemented")
     if set(scope.get("implemented", [])) != set(EXPECTED_OPERATION_IDS):
         raise SystemExit("compatibility scope does not match the OpenAPI implementation set")
     todo_ids = [item.get("id") for item in scope.get("todo", [])]

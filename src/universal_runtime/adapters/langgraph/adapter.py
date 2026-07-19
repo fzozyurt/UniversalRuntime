@@ -12,7 +12,11 @@ from universal_runtime.adapters.langgraph.errors import LangGraphAdapterError, L
 from universal_runtime.adapters.langgraph.interrupt_adapter import resume_command
 from universal_runtime.adapters.langgraph.loader import load_graph
 from universal_runtime.adapters.langgraph.manifest import langgraph_manifest
-from universal_runtime.adapters.langgraph.persistence import local_persistence, validate_persistence
+from universal_runtime.adapters.langgraph.persistence import (
+    PersistenceProviders,
+    local_persistence,
+    validate_persistence,
+)
 from universal_runtime.adapters.langgraph.state_adapter import get_state, get_state_history
 from universal_runtime.adapters.langgraph.stream_mapper import map_stream
 from universal_runtime.domain.capabilities import AdapterCapabilities, AdapterManifest
@@ -21,32 +25,49 @@ from universal_runtime.domain.execution import ExecutionRequest
 
 
 class LangGraphAdapter:
-    def __init__(self, target: Any, *, persistence_mode: str = "disabled") -> None:
+    def __init__(
+        self,
+        target: Any,
+        *,
+        persistence_mode: str = "disabled",
+        providers: PersistenceProviders | None = None,
+    ) -> None:
         source_descriptor = detect_graph(target)
         validate_persistence(persistence_mode, has_checkpointer=source_descriptor.has_checkpointer)
-        providers = (
-            local_persistence(persistence_mode)
+        selected = providers or (
+            local_persistence("platform-managed")
             if persistence_mode == "platform-managed"
             else local_persistence("disabled")
         )
-        self._graph = load_graph(target, checkpointer=providers.checkpointer, store=providers.store)
+        self._persistence_mode = persistence_mode
+        self._providers = selected
+        self._graph = load_graph(target, checkpointer=selected.checkpointer, store=selected.store)
         self._descriptor: LangGraphDescriptor = detect_graph(self._graph)
-        self._manifest = self._manifest_for_graph(langgraph_manifest())
+        self._manifest = self._manifest_for_graph(
+            langgraph_manifest(session_affinity=selected.session_affinity)
+        )
         self._tasks: dict[str, asyncio.Task[Any]] = {}
 
     def _manifest_for_graph(self, manifest: AdapterManifest) -> AdapterManifest:
         capabilities = manifest.capabilities
-        has_state = self._descriptor.has_checkpointer
+        persistence_enabled = (
+            self._persistence_mode != "disabled"
+            and self._providers.checkpointer is not None
+            and self._descriptor.has_checkpointer
+        )
+        has_state = persistence_enabled and hasattr(self._graph, "aget_state")
+        has_history = persistence_enabled and hasattr(self._graph, "aget_state_history")
+        has_update = persistence_enabled and hasattr(self._graph, "aupdate_state")
         return replace(
             manifest,
             capabilities=AdapterCapabilities(
                 streaming=capabilities.streaming,
-                cancellation=capabilities.cancellation,
-                history=has_state,
-                checkpoint=has_state,
-                state_management=has_state,
-                interrupt=has_state,
-                resume=has_state,
+                cancellation=True,
+                history=has_history,
+                checkpoint=persistence_enabled,
+                state_management=has_state or has_update,
+                interrupt=persistence_enabled,
+                resume=persistence_enabled,
                 fork=capabilities.fork,
                 custom_http=capabilities.custom_http,
                 a2a=capabilities.a2a,
@@ -148,19 +169,33 @@ class LangGraphAdapter:
         task.cancel()
 
     async def get_state(self, request: ExecutionRequest) -> Any:
+        if not self._manifest.capabilities.state_management:
+            raise LangGraphAdapterError(
+                LangGraphErrorCode.CAPABILITY_NOT_SUPPORTED, "state is not supported"
+            )
         return await get_state(self._graph, map_config(request))
 
     async def get_state_history(self, request: ExecutionRequest) -> Any:
+        if not self._manifest.capabilities.history:
+            raise LangGraphAdapterError(
+                LangGraphErrorCode.CAPABILITY_NOT_SUPPORTED, "state history is not supported"
+            )
         return await get_state_history(self._graph, map_config(request))
 
     async def update_state(self, request: ExecutionRequest, values: Any) -> Any:
-        if not hasattr(self._graph, "aupdate_state"):
+        if not self._manifest.capabilities.state_management or not hasattr(
+            self._graph, "aupdate_state"
+        ):
             raise LangGraphAdapterError(
                 LangGraphErrorCode.CAPABILITY_NOT_SUPPORTED, "state update is not supported"
             )
         return await self._graph.aupdate_state(map_config(request), values)
 
     async def resume(self, request: ExecutionRequest, value: Any) -> Any:
+        if not self._manifest.capabilities.resume:
+            raise LangGraphAdapterError(
+                LangGraphErrorCode.CAPABILITY_NOT_SUPPORTED, "resume is not supported"
+            )
         if request.identity.thread_id is None:
             raise LangGraphAdapterError(
                 LangGraphErrorCode.INVALID_GRAPH, "resume requires a thread"

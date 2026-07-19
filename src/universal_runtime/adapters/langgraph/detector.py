@@ -15,7 +15,6 @@ def detect_graph(
     entrypoint: str = "<object>",
     profile: LangGraphProfile | None = None,
 ) -> LangGraphDescriptor:
-    name = type(target).__name__.lower()
     module = type(target).__module__.lower()
     is_compiled = hasattr(target, "astream") and hasattr(target, "ainvoke")
     is_factory = callable(target) and not is_compiled
@@ -31,9 +30,9 @@ def detect_graph(
     integration = str(metadata.get("ls_integration", ""))
     if profile is not None:
         resolved_profile = profile
-    elif integration == "deepagents" or "deep" in module or "deep" in name:
+    elif integration == "deepagents" or module.startswith("deepagents"):
         resolved_profile = LangGraphProfile.DEEPAGENTS
-    elif integration == "langchain_create_agent" or "agent" in module or "agent" in name:
+    elif integration == "langchain_create_agent" or module.startswith("langchain"):
         resolved_profile = LangGraphProfile.LANGCHAIN_AGENT
     else:
         resolved_profile = LangGraphProfile.LANGGRAPH
