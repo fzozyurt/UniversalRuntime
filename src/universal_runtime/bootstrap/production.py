@@ -28,9 +28,8 @@ def create_production_runtime() -> LocalRuntime:
         max_overflow=int(os.environ.get("UR_DB_MAX_OVERFLOW", "20")),
     )
     sessions = create_session_factory(engine)
-    assistants = PostgresAssistantRepository(
-        sessions, os.environ.get("UR_APPLICATION_ID", "default")
-    )
+    application_id = os.environ.get("UR_APPLICATION_ID", "default")
+    assistants = PostgresAssistantRepository(sessions, application_id)
     threads = PostgresThreadRepository(sessions)
     runs = PostgresRunRepository(sessions)
     events = PostgresEventJournal(sessions)
@@ -40,7 +39,7 @@ def create_production_runtime() -> LocalRuntime:
             prefix=os.environ.get("UR_TOPIC_PREFIX", "rt"),
             environment=os.environ.get("UR_KAFKA_ENVIRONMENT", "local"),
         ),
-        group_id=f"{os.environ.get('UR_APPLICATION_ID', 'default')}.gateway",
+        group_id=f"{application_id}.gateway",
     )
     capacity = ExecutionCapacity(int(os.environ.get("UR_WORKER_MAX_CONCURRENCY", "8")))
     adapters = InMemoryAdapterRegistry()
@@ -63,6 +62,7 @@ def create_production_runtime() -> LocalRuntime:
             journal=events,
             replay=events,
             subscription=events,
+            assistants=assistants,
             adapters=adapters,
             capacity=capacity,
         ),
