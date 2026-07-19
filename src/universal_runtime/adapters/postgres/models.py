@@ -76,6 +76,7 @@ class DeploymentRow(AuditMixin, PlatformBase):
 
     id: Mapped[str] = mapped_column(String(255), primary_key=True)
     application_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    revision_id: Mapped[str] = mapped_column(String(255), nullable=False)
     environment: Mapped[str] = mapped_column(String(63), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
 
@@ -97,17 +98,25 @@ class DeploymentConfigRevisionRow(AuditMixin, PlatformBase):
 
 class GraphRow(AuditMixin, PlatformBase):
     __tablename__ = "graphs"
-    __table_args__ = ({"schema": DEFAULT_SCHEMAS.core},)
+    __table_args__ = (
+        UniqueConstraint("application_id", "graph_id"),
+        {"schema": DEFAULT_SCHEMAS.core},
+    )
 
     id: Mapped[str] = mapped_column(String(255), primary_key=True)
     application_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    revision_id: Mapped[str] = mapped_column(String(255), nullable=False)
     graph_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    entrypoint: Mapped[str] = mapped_column(String(1024), nullable=False)
     descriptor: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
 
 
 class AssistantRow(AuditMixin, PlatformBase):
     __tablename__ = "assistants"
-    __table_args__ = ({"schema": DEFAULT_SCHEMAS.core},)
+    __table_args__ = (
+        Index("ix_assistants_application_graph", "application_id", "graph_id"),
+        {"schema": DEFAULT_SCHEMAS.core},
+    )
 
     id: Mapped[str] = mapped_column(String(255), primary_key=True)
     application_id: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -132,9 +141,16 @@ class AssistantVersionRow(AuditMixin, PlatformBase):
 
 class ThreadRow(AuditMixin, PlatformBase):
     __tablename__ = "threads"
-    __table_args__ = ({"schema": DEFAULT_SCHEMAS.execution},)
+    __table_args__ = (
+        Index("ix_threads_application_created", "application_id", "created_at"),
+        Index("ix_threads_application_status", "application_id", "status"),
+        {"schema": DEFAULT_SCHEMAS.execution},
+    )
 
     id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    application_id: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, nullable=False)
 
@@ -148,6 +164,7 @@ class RunRow(AuditMixin, PlatformBase):
             unique=True,
             postgresql_where=text("status IN ('pending', 'running', 'interrupted')"),
         ),
+        Index("ix_runs_deployment_status", "deployment_id", "status"),
         {"schema": DEFAULT_SCHEMAS.execution},
     )
 
@@ -158,6 +175,8 @@ class RunRow(AuditMixin, PlatformBase):
     revision_id: Mapped[str] = mapped_column(String(255), nullable=False)
     deployment_id: Mapped[str] = mapped_column(String(255), nullable=False)
     assistant_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    assistant_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+    graph_id: Mapped[str] = mapped_column(String(255), nullable=False, server_default=text("'default'"))
     thread_id: Mapped[str | None] = mapped_column(String(255))
     attempt_id: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -292,13 +311,26 @@ class RunLifecycleEventRow(AuditMixin, PlatformBase):
 
 class WorkerRow(AuditMixin, PlatformBase):
     __tablename__ = "workers"
-    __table_args__ = ({"schema": DEFAULT_SCHEMAS.execution},)
+    __table_args__ = (
+        UniqueConstraint("worker_id"),
+        Index("ix_workers_deployment_status", "deployment_id", "status"),
+        {"schema": DEFAULT_SCHEMAS.execution},
+    )
 
     id: Mapped[str] = mapped_column(String(255), primary_key=True)
-    worker_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    worker_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    application_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    revision_id: Mapped[str] = mapped_column(String(255), nullable=False)
     deployment_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    grpc_target: Mapped[str] = mapped_column(String(1024), nullable=False)
+    graph_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
+    max_concurrency: Mapped[int] = mapped_column(Integer, nullable=False)
+    active_executions: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    available_slots: Mapped[int] = mapped_column(Integer, nullable=False)
     capabilities: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    last_heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class WorkerLeaseRow(AuditMixin, PlatformBase):
