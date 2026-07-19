@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from copy import deepcopy
 from dataclasses import replace
 
 from universal_runtime.domain.errors import ErrorCode, RuntimeFailure
@@ -23,7 +24,7 @@ class InMemoryApplicationConfigRepository:
         async with self._lock(application_id):
             for revision in reversed(self._revisions.get(application_id, [])):
                 if revision.active:
-                    return revision
+                    return deepcopy(revision)
         raise RuntimeFailure(
             ErrorCode.RESOURCE_NOT_FOUND, f"active config not found: {application_id}"
         )
@@ -43,7 +44,7 @@ class InMemoryApplicationConfigRepository:
                 ConfigRevisionId.new(),
             )
             revisions.append(revision)
-            return revision
+            return deepcopy(revision)
 
     async def activate(self, application_id: str, revision: int) -> ConfigRevision:
         async with self._lock(application_id):
@@ -54,4 +55,4 @@ class InMemoryApplicationConfigRepository:
                 )
             activated = [replace(item, active=item.revision == revision) for item in revisions]
             self._revisions[application_id] = activated
-            return activated[revision - 1]
+            return deepcopy(activated[revision - 1])

@@ -7,9 +7,10 @@ from universal_runtime.domain.errors import ErrorCode, RuntimeFailure
 from universal_runtime.domain.events import RuntimeEvent, RuntimeEventDraft, RuntimeEventType
 from universal_runtime.domain.execution import Run, RunError, Thread
 from universal_runtime.domain.execution.requests import ExecutionRequest
-from universal_runtime.domain.identity import RunId, ThreadId
+from universal_runtime.domain.identity import CommandId, RunId, ThreadId
 from universal_runtime.domain.primitives.json_types import JsonObject
 from universal_runtime.ports.events import EventJournal, EventReplay, EventSubscription
+from universal_runtime.ports.outbox import OutboxMessage, OutboxRepository
 from universal_runtime.ports.queue import RunCommandQueue
 from universal_runtime.ports.repositories import RunRepository, ThreadRepository
 
@@ -28,6 +29,7 @@ class RuntimeExecutionService:
         journal: EventJournal,
         replay: EventReplay | None = None,
         subscription: EventSubscription | None = None,
+        outbox: OutboxRepository | None = None,
     ) -> None:
         self._threads = threads
         self._runs = runs
@@ -35,6 +37,7 @@ class RuntimeExecutionService:
         self._journal = journal
         self._replay = replay
         self._subscription = subscription
+        self._outbox = outbox
 
     async def create_thread(
         self, thread_id: str | None = None, metadata: JsonObject | None = None
@@ -48,7 +51,9 @@ class RuntimeExecutionService:
         )
         return await self._threads.create(thread)
 
-    async def start_run(self, request: ExecutionRequest) -> Run:
+    async def start_run(
+        self, request: ExecutionRequest, *, outbox: OutboxRepository | None = None
+    ) -> Run:
         now = _now()
         thread_id = request.identity.thread_id
         if thread_id is not None:
@@ -64,7 +69,33 @@ class RuntimeExecutionService:
         )
         created = await self._runs.create(run)
         try:
-            await self._commands.publish(request)
+            selected_outbox = outbox or self._outbox
+            if selected_outbox is not None:
+                await selected_outbox.append(
+                    OutboxMessage(
+                        message_id=CommandId.new(),
+                        topic="rt.local.run.commands.v1",
+                        key=f"{request.identity.application_id}:{request.identity.thread_id or 'stateless'}",
+                        payload={
+                            "run_id": str(request.identity.run_id),
+                            "assistant_id": str(request.identity.assistant_id),
+                            "thread_id": (
+                                str(request.identity.thread_id)
+                                if request.identity.thread_id is not None
+                                else None
+                            ),
+                            "input": request.input,
+                            "command": request.command,
+                            "config": request.config,
+                            "context": request.context,
+                            "metadata": request.metadata,
+                            "stream_modes": list(request.stream_modes),
+                        },
+                        created_at=now,
+                    )
+                )
+            else:
+                await self._commands.publish(request)
             await self._journal.append(
                 RuntimeEventDraft(
                     request.identity,

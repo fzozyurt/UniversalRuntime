@@ -65,6 +65,21 @@ paths:
       responses:
         '200':
           description: Validation result
+  /api/v1/applications/{application_id}/config/{revision}/activate:
+    parameters:
+      - $ref: '#/components/parameters/ApplicationId'
+      - name: revision
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    post:
+      operationId: activateApplicationConfigRevision
+      responses:
+        '200':
+          description: Activated immutable revision
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NativeResponse' }
   /assistants:
     post:
       operationId: createAssistant

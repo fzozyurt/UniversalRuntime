@@ -1,7 +1,7 @@
 {
   "version": "1",
   "matrix": "docs/compatibility/LANGGRAPH_COMPATIBILITY_MATRIX.md",
-  "contracted": [],
+  "contracted": ["health", "server_info", "assistant_create", "assistant_get", "assistant_search", "assistant_schemas", "thread_create", "thread_get", "thread_state_get", "thread_state_update", "thread_history", "run_create", "run_stream", "stateless_run_stream", "stateless_run_wait", "run_get", "run_cancel", "agent_card", "config_get", "config_revision_create", "config_validate", "config_activate"],
   "verified": [],
   "implemented": [
     "health",
@@ -21,7 +21,11 @@
     "stateless_run_wait",
     "run_get",
     "run_cancel",
-    "agent_card"
+    "agent_card",
+    "config_get",
+    "config_revision_create",
+    "config_validate",
+    "config_activate"
   ],
   "todo": [
     {

@@ -20,6 +20,10 @@ class InMemoryAssistantRepository:
             self._items[str(assistant.assistant_id)] = assistant
             return assistant
 
+    async def all(self) -> tuple[Assistant, ...]:
+        async with self._lock:
+            return tuple(self._items.values())
+
     async def get(self, assistant_id: str | AssistantId) -> Assistant:
         try:
             return self._items[str(assistant_id)]

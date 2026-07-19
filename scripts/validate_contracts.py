@@ -32,6 +32,10 @@ EXPECTED_OPERATION_IDS = {
     "run_get": "getRun",
     "run_cancel": "cancelRun",
     "agent_card": "getAgentCard",
+    "config_get": "getApplicationConfig",
+    "config_revision_create": "createApplicationConfigRevision",
+    "config_validate": "validateApplicationConfig",
+    "config_activate": "activateApplicationConfigRevision",
 }
 
 
