@@ -5,5 +5,5 @@ from typing import Any
 from langgraph.types import Command
 
 
-def resume_command(value: Any) -> Command:
+def resume_command(value: Any) -> Command[Any]:
     return Command(resume=value)
