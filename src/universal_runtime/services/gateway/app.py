@@ -10,7 +10,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from jsonschema import Draft202012Validator
 
+from universal_runtime.adapters.a2a.server import create_a2a_routes
 from universal_runtime.bootstrap.local import LocalRuntime, create_local_runtime
+from universal_runtime.domain.assistants import Assistant
+from universal_runtime.domain.capabilities import AdapterManifest
 from universal_runtime.domain.errors import ErrorCode, RuntimeFailure
 from universal_runtime.domain.execution import ExecutionRequest, QueuePriority
 from universal_runtime.domain.identity import (
@@ -45,7 +48,12 @@ SCHEMA_PATH = (
 
 
 def create_app(
-    runtime: LocalRuntime | None = None, *, custom_http_target: str | None = None
+    runtime: LocalRuntime | None = None,
+    *,
+    custom_http_target: str | None = None,
+    a2a_assistant: Assistant | None = None,
+    a2a_manifest: AdapterManifest | None = None,
+    a2a_public_url: str = "http://localhost:8080",
 ) -> FastAPI:
     state = runtime or create_local_runtime()
     schema = _load_schema()
@@ -53,6 +61,14 @@ def create_app(
     app.state.runtime = state
     if custom_http_target is not None:
         app.include_router(create_custom_http_router(custom_http_target))
+    if a2a_assistant is not None and a2a_manifest is not None:
+        for route in create_a2a_routes(
+            runtime=state,
+            assistant=a2a_assistant,
+            manifest=a2a_manifest,
+            public_url=a2a_public_url,
+        ):
+            app.routes.append(route)
 
     @app.middleware("http")
     async def request_id(request: Request, call_next: Any) -> Any:

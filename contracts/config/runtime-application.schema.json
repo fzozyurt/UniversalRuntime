@@ -390,18 +390,13 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "enabled": {
-          "type": "boolean",
-          "default": false
-        },
-        "streaming": {
-          "type": "boolean",
-          "default": true
-        },
-        "agentCardPath": {
-          "type": "string",
-          "default": "/.well-known/agent-card.json"
-        }
+        "enabled": {"type": "boolean", "default": false},
+        "streaming": {"type": "boolean", "default": true},
+        "agentCardPath": {"type": "string", "pattern": "^/", "default": "/.well-known/agent-card.json"},
+        "publicBaseUrl": {"type": "string", "format": "uri"},
+        "defaultAssistantId": {"type": "string"},
+        "maxInlineArtifactBytes": {"type": "integer", "minimum": 0},
+        "disconnectPolicy": {"enum": ["continue", "cancel"]}
       }
     }
   }
