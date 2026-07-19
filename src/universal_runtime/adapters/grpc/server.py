@@ -29,9 +29,12 @@ class WorkerServer:
         return cls(worker, server)
 
     async def start(self, host: str, port: int) -> None:
+        await self.start_listening(host, port)
+        await self.server.wait_for_termination()
+
+    async def start_listening(self, host: str, port: int) -> None:
         self.server.add_insecure_port(f"{host}:{port}")
         await self.server.start()
-        await self.server.wait_for_termination()
 
     async def stop(self, grace: float) -> None:
         await self.worker.drain(grace)
