@@ -18,6 +18,7 @@ from universal_runtime.adapters.postgres.repositories import (
     PostgresRunRepository,
     PostgresThreadRepository,
 )
+from universal_runtime.adapters.postgres.workers import PostgresWorkerRegistry
 from universal_runtime.bootstrap.runtime_config import LauncherConfig
 from universal_runtime.domain.errors import ErrorCode, RuntimeFailure
 from universal_runtime.domain.events import RuntimeEventDraft, RuntimeEventType
@@ -68,8 +69,11 @@ def _invocation(command: Any) -> execution_pb2.InvokeRequest:
 class Dispatcher:
     def __init__(self) -> None:
         self.config = LauncherConfig.from_environment()
+        database_url = os.environ.get("UR_PLATFORM_DATABASE_URL") or os.environ[
+            "UR_DATABASE_URL"
+        ]
         self.engine = create_engine(
-            os.environ["UR_DATABASE_URL"],
+            database_url,
             pool_size=int(os.environ.get("UR_DISPATCHER_DB_POOL_SIZE", "5")),
             max_overflow=int(os.environ.get("UR_DISPATCHER_DB_MAX_OVERFLOW", "5")),
         )
@@ -77,23 +81,22 @@ class Dispatcher:
         self.runs = PostgresRunRepository(sessions)
         self.threads = PostgresThreadRepository(sessions)
         self.events = PostgresEventJournal(sessions)
+        self.workers = PostgresWorkerRegistry(sessions)
         topics = TopicNames.from_config(
             prefix=self.config.topic_prefix, environment=self.config.kafka_environment
         )
         self.queue = AioKafkaRunCommandQueue(
             bootstrap_servers=self.config.kafka_bootstrap_servers,
             topics=topics,
-            group_id=f"{os.environ.get('UR_APPLICATION_ID', 'default')}.dispatcher",
+            group_id=os.environ.get("UR_DISPATCHER_GROUP_ID", "runtime.dispatcher"),
         )
-        targets = [
+        self._channels: dict[str, grpc.aio.Channel] = {}
+        self._fallback_targets = tuple(
             target.strip()
-            for target in os.environ.get("UR_WORKER_TARGETS", "worker-1:9090,worker-2:9090").split(",")
+            for target in os.environ.get("UR_WORKER_TARGETS", "").split(",")
             if target.strip()
-        ]
-        if not targets:
-            raise RuntimeError("UR_WORKER_TARGETS must contain at least one gRPC target")
-        self.channels = [grpc.aio.insecure_channel(target) for target in targets]
-        self._worker_index = 0
+        )
+        self._fallback_index = 0
 
     async def run(self, stop: asyncio.Event) -> None:
         while not stop.is_set():
@@ -104,6 +107,36 @@ class Dispatcher:
         from universal_runtime.domain.identity import WorkerId
 
         return WorkerId.parse(os.environ.get("UR_INSTANCE_ID", "dispatcher"))
+
+    async def _worker_target(self, receipt: Any) -> str:
+        request = receipt.command.request
+        candidates = await self.workers.candidates(
+            receipt.identity.deployment_id,
+            request.target.graph_id,
+            now=datetime.now(UTC),
+        )
+        if candidates:
+            return candidates[0].grpc_target
+        if self._fallback_targets:
+            target = self._fallback_targets[self._fallback_index % len(self._fallback_targets)]
+            self._fallback_index += 1
+            return target
+        raise RuntimeFailure(
+            ErrorCode.INFRASTRUCTURE_UNAVAILABLE,
+            "no healthy worker supports the requested deployment and graph",
+            retryable=True,
+            details={
+                "deployment_id": str(receipt.identity.deployment_id),
+                "graph_id": request.target.graph_id,
+            },
+        )
+
+    def _channel(self, target: str) -> grpc.aio.Channel:
+        channel = self._channels.get(target)
+        if channel is None:
+            channel = grpc.aio.insecure_channel(target)
+            self._channels[target] = channel
+        return channel
 
     async def _dispatch(self, receipt: Any) -> None:
         try:
@@ -116,10 +149,9 @@ class Dispatcher:
         if run.status is not RunStatus.PENDING:
             await self.queue.acknowledge(receipt)
             return
+        target = await self._worker_target(receipt)
         await self.runs.update(run.mark_running(datetime.now(UTC)))
-        channel = self.channels[self._worker_index % len(self.channels)]
-        self._worker_index += 1
-        stub = execution_pb2_grpc.ExecutionServiceStub(channel)
+        stub = execution_pb2_grpc.ExecutionServiceStub(self._channel(target))
         terminal = False
         last_result: Any = None
         try:
@@ -173,7 +205,7 @@ class Dispatcher:
                 RuntimeEventDraft(
                     receipt.identity,
                     RuntimeEventType.RUN_FAILED,
-                    data={"error": str(exc)},
+                    data={"error": str(exc), "worker_target": target},
                 )
             )
             if current.status not in {
@@ -190,7 +222,7 @@ class Dispatcher:
 
     async def close(self) -> None:
         await self.queue.close()
-        for channel in self.channels:
+        for channel in self._channels.values():
             await channel.close()
         await self.engine.dispose()
 
@@ -214,7 +246,7 @@ def create_dispatch_queue() -> AioKafkaRunCommandQueue:
         topics=TopicNames.from_config(
             prefix=config.topic_prefix, environment=config.kafka_environment
         ),
-        group_id=f"{os.environ.get('UR_APPLICATION_ID', 'default')}.dispatcher",
+        group_id=os.environ.get("UR_DISPATCHER_GROUP_ID", "runtime.dispatcher"),
     )
 
 
