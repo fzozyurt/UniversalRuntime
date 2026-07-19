@@ -16,6 +16,24 @@ from universal_runtime.adapters.postgres.repositories import (
 )
 from universal_runtime.application.runtime_service import RuntimeExecutionService
 from universal_runtime.bootstrap.local import LocalRuntime
+from universal_runtime.domain.identity import (
+    ApplicationId,
+    ApplicationScope,
+    DeploymentId,
+    ProjectId,
+    RevisionId,
+    WorkspaceId,
+)
+
+
+def _application_scope() -> ApplicationScope:
+    return ApplicationScope(
+        WorkspaceId.parse(os.environ.get("UR_WORKSPACE_ID", "default")),
+        ProjectId.parse(os.environ.get("UR_PROJECT_ID", "default")),
+        ApplicationId.parse(os.environ.get("UR_APPLICATION_ID", "default")),
+        RevisionId.parse(os.environ.get("UR_REVISION_ID", "active")),
+        DeploymentId.parse(os.environ.get("UR_DEPLOYMENT_ID", "local")),
+    )
 
 
 def create_production_runtime() -> LocalRuntime:
@@ -28,9 +46,10 @@ def create_production_runtime() -> LocalRuntime:
         max_overflow=int(os.environ.get("UR_DB_MAX_OVERFLOW", "20")),
     )
     sessions = create_session_factory(engine)
-    application_id = os.environ.get("UR_APPLICATION_ID", "default")
+    scope = _application_scope()
+    application_id = str(scope.application_id)
     assistants = PostgresAssistantRepository(sessions, application_id)
-    threads = PostgresThreadRepository(sessions)
+    threads = PostgresThreadRepository(sessions, scope)
     runs = PostgresRunRepository(sessions)
     events = PostgresEventJournal(sessions)
     commands = AioKafkaRunCommandQueue(
