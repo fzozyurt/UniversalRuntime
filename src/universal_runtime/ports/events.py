@@ -25,3 +25,11 @@ class EventSubscription(Protocol):
 
 class IntegrationEventPublisher(Protocol):
     async def publish(self, event: RuntimeEvent) -> None: ...
+
+
+class RuntimeEventPublisher(Protocol):
+    async def publish(self, event: RuntimeEvent) -> None: ...
+
+
+class LifecycleEventPublisher(Protocol):
+    async def publish(self, event: RuntimeEvent) -> None: ...

@@ -210,14 +210,19 @@ def create_app(runtime: LocalRuntime | None = None) -> FastAPI:
         return _run_payload(run)
 
     @app.post("/threads/{thread_id}/runs/stream")
-    async def stream_run(thread_id: str, payload: RunCreate) -> StreamingResponse:
+    async def stream_run(thread_id: str, request: Request, payload: RunCreate) -> StreamingResponse:
         run = await _start_run(state, payload, thread_id)
-        return _sse_response(state, run.run_id, payload.stream_mode)
+        return _sse_response(state, run.run_id, payload.stream_mode, request=request)
 
     @app.post("/runs/stream")
-    async def stream_stateless_run(payload: RunCreate) -> StreamingResponse:
+    async def stream_stateless_run(request: Request, payload: RunCreate) -> StreamingResponse:
         run = await _start_run(state, payload, None)
-        return _sse_response(state, run.run_id, payload.stream_mode)
+        return _sse_response(state, run.run_id, payload.stream_mode, request=request)
+
+    @app.get("/api/v1/runs/{run_id}/events")
+    async def native_run_events(run_id: str, request: Request) -> StreamingResponse:
+        await state.runs.get(run_id)
+        return _sse_response(state, RunId.parse(run_id), "events", request=request, native=True)
 
     @app.post("/runs/wait")
     async def wait_stateless_run(payload: RunCreate) -> dict[str, Any]:
@@ -280,32 +285,61 @@ def _identity(
     )
 
 
-def _sse_response(state: LocalRuntime, run_id: RunId, mode: str | list[str]) -> StreamingResponse:
+def _sse_response(
+    state: LocalRuntime,
+    run_id: RunId,
+    mode: str | list[str],
+    *,
+    request: Request,
+    native: bool = False,
+) -> StreamingResponse:
     selected = mode if isinstance(mode, str) else mode[0]
+    cursor_text = request.headers.get("last-event-id")
+    try:
+        after_sequence = int(cursor_text) if cursor_text is not None else -1
+    except ValueError as exc:
+        raise RuntimeFailure(
+            ErrorCode.STREAM_CURSOR_INVALID, "Last-Event-ID must be an integer"
+        ) from exc
+    if after_sequence < -1:
+        raise RuntimeFailure(ErrorCode.STREAM_CURSOR_INVALID, "Last-Event-ID must be >= 0")
 
     async def stream() -> Any:
-        events = await state.events.replay(run_id)
-        yield (
-            "event: metadata"
-            + chr(10)
-            + "data: "
-            + json.dumps({"run_id": str(run_id)})
-            + chr(10)
-            + chr(10)
-        )
-        for event in events:
-            yield (
-                "event: "
-                + selected
-                + chr(10)
-                + "data: "
-                + json.dumps(event.data)
-                + chr(10)
-                + chr(10)
-            )
-        yield "event: end" + chr(10) + "data: null" + chr(10) + chr(10)
+        if not native:
+            yield "event: metadata\ndata: " + json.dumps({"run_id": str(run_id)}) + "\n\n"
+        async for event in state.events.subscribe(run_id, after_sequence=after_sequence):
+            event_name = str(event.type) if native else selected
+            payload = event.data if not native else _event_payload(event)
+            yield f"id: {event.sequence}\nevent: {event_name}\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
+        if not native:
+            yield "event: end\ndata: null\n\n"
 
-    return StreamingResponse(stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+def _event_payload(event: Any) -> JsonObject:
+    return {
+        "schema_version": event.schema_version,
+        "event_id": str(event.event_id),
+        "sequence": event.sequence,
+        "timestamp": event.timestamp.isoformat(),
+        "application_id": str(event.identity.scope.application_id),
+        "revision_id": str(event.identity.scope.revision_id),
+        "deployment_id": str(event.identity.scope.deployment_id),
+        "assistant_id": str(event.identity.assistant_id),
+        "thread_id": str(event.identity.thread_id) if event.identity.thread_id else None,
+        "run_id": str(event.identity.run_id),
+        "attempt_id": str(event.identity.attempt_id),
+        "type": str(event.type),
+        "namespace": list(event.namespace),
+        "data": event.data,
+        "trace": {"trace_id": event.trace.trace_id, "span_id": event.trace.span_id},
+        "native": event.native,
+    }
 
 
 def _native(data: Any, request: Request) -> NativeResponse:

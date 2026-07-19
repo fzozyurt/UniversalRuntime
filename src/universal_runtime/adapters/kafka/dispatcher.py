@@ -15,7 +15,7 @@ from .topics import TopicNames
 class KafkaMessage:
     topic: str
     key: str
-    value: RunCommand
+    value: object
     headers: tuple[tuple[str, str], ...]
 
 

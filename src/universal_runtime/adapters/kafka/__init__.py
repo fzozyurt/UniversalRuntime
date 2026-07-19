@@ -11,7 +11,10 @@ __all__ = [
     "InMemoryKafkaTransport",
     "KafkaMessage",
     "KafkaRunCommandQueue",
+    "KafkaRuntimeEventPublisher",
     "PartitionKey",
     "TopicNames",
     "WeightedFairDispatcher",
 ]
+
+from .event_transport import KafkaRuntimeEventPublisher

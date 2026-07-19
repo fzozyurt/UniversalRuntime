@@ -5,6 +5,7 @@ from collections import defaultdict
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
+from universal_runtime.domain.errors import ErrorCode, RuntimeFailure
 from universal_runtime.domain.events import (
     RuntimeEvent,
     RuntimeEventDraft,
@@ -24,14 +25,17 @@ _TERMINAL = {
 
 class InMemoryEventJournal(EventJournal, EventReplay, EventSubscription):
     def __init__(self, *, queue_size: int = 128) -> None:
+        if queue_size < 1:
+            raise ValueError("queue_size must be positive")
         self._events: dict[str, list[RuntimeEvent]] = defaultdict(list)
         self._subscribers: dict[str, set[asyncio.Queue[RuntimeEvent | None]]] = defaultdict(set)
+        self._overflowed: set[asyncio.Queue[RuntimeEvent | None]] = set()
         self._lock = asyncio.Lock()
         self._queue_size = queue_size
 
     async def append(self, draft: RuntimeEventDraft) -> RuntimeEvent:
+        key = str(draft.identity.run_id)
         async with self._lock:
-            key = str(draft.identity.run_id)
             event = RuntimeEvent(
                 EventId.new(),
                 len(self._events[key]),
@@ -44,17 +48,36 @@ class InMemoryEventJournal(EventJournal, EventReplay, EventSubscription):
                 TraceContext(),
             )
             self._events[key].append(event)
-            for queue in tuple(self._subscribers[key]):
+            subscribers = tuple(self._subscribers[key])
+            terminal = event.type in _TERMINAL
+            for queue in subscribers:
+                if queue in self._overflowed:
+                    continue
                 try:
                     queue.put_nowait(event)
-                except asyncio.QueueFull as exc:
-                    raise RuntimeError("event subscriber backpressure") from exc
-            if event.type in _TERMINAL:
-                for queue in tuple(self._subscribers[key]):
-                    queue.put_nowait(None)
+                except asyncio.QueueFull:
+                    self._overflowed.add(queue)
+                    self._subscribers[key].discard(queue)
+                    self._close_queue(queue)
+            if terminal:
+                for queue in subscribers:
+                    self._subscribers[key].discard(queue)
+                    self._close_queue(queue)
+            if not self._subscribers[key]:
+                self._subscribers.pop(key, None)
             return event
 
+    @staticmethod
+    def _close_queue(queue: asyncio.Queue[RuntimeEvent | None]) -> None:
+        try:
+            queue.put_nowait(None)
+        except asyncio.QueueFull:
+            queue.get_nowait()
+            queue.put_nowait(None)
+
     async def replay(self, run_id: RunId, *, after_sequence: int = -1) -> tuple[RuntimeEvent, ...]:
+        if after_sequence < -1:
+            raise RuntimeFailure(ErrorCode.STREAM_CURSOR_INVALID, "sequence cursor must be >= -1")
         async with self._lock:
             return tuple(
                 e for e in self._events.get(str(run_id), ()) if e.sequence > after_sequence
@@ -63,6 +86,8 @@ class InMemoryEventJournal(EventJournal, EventReplay, EventSubscription):
     async def subscribe(
         self, run_id: RunId, *, after_sequence: int = -1
     ) -> AsyncIterator[RuntimeEvent]:
+        if after_sequence < -1:
+            raise RuntimeFailure(ErrorCode.STREAM_CURSOR_INVALID, "sequence cursor must be >= -1")
         key = str(run_id)
         queue: asyncio.Queue[RuntimeEvent | None] = asyncio.Queue(self._queue_size)
         async with self._lock:
@@ -76,12 +101,13 @@ class InMemoryEventJournal(EventJournal, EventReplay, EventSubscription):
             if terminal:
                 return
             while True:
-                received: RuntimeEvent | None = await queue.get()
+                received = await queue.get()
                 if received is None:
                     return
                 yield received
         finally:
             async with self._lock:
                 self._subscribers[key].discard(queue)
+                self._overflowed.discard(queue)
                 if not self._subscribers[key]:
                     self._subscribers.pop(key, None)

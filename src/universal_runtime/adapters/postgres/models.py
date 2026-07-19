@@ -195,6 +195,27 @@ class RunCommandRow(AuditMixin, PlatformBase):
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class RuntimeEventRow(AuditMixin, PlatformBase):
+    __tablename__ = "runtime_events"
+    __table_args__ = (
+        UniqueConstraint("run_id", "sequence"),
+        UniqueConstraint("event_id"),
+        {"schema": DEFAULT_SCHEMAS.execution},
+    )
+
+    id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    event_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    identity_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    namespace: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    data: Mapped[Any] = mapped_column(JSON, nullable=False)
+    trace: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    native: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
 class RuntimeEventBatchRow(AuditMixin, PlatformBase):
     __tablename__ = "runtime_event_batches"
     __table_args__ = (

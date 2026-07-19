@@ -1,3 +1,6 @@
-from services.event_projector.main import main
+from __future__ import annotations
 
-__all__ = ["main"]
+
+def main() -> int:
+    """Projector composition root; transport wiring is supplied by bootstrap."""
+    return 0
