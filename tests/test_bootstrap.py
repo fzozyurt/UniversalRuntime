@@ -22,3 +22,15 @@ def test_launcher_returns_error_for_invalid_config(capsys) -> None:
     assert main(["validate-config", str(path)]) == 1
     assert "required property" in capsys.readouterr().out
     path.unlink(missing_ok=True)
+
+
+def test_runtime_config_loader_resolves_and_redacts() -> None:
+    from universal_runtime.configuration.loader import RuntimeConfigLoader
+
+    loader = RuntimeConfigLoader(ROOT / "contracts/config/runtime-application.schema.json")
+    config = loader.load(ROOT / "runtime.example.yaml", environ={})
+    assert config["apiVersion"] == "runtime.ai/v1alpha1"
+    assert (
+        loader.redact({"api_key": "secret", "nested": {"password": "hidden"}})["api_key"]
+        == "[REDACTED]"
+    )

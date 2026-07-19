@@ -9,7 +9,12 @@ from universal_runtime.adapters.langgraph.descriptor import (
 )
 
 
-def detect_graph(target: Any, *, entrypoint: str = "<object>") -> LangGraphDescriptor:
+def detect_graph(
+    target: Any,
+    *,
+    entrypoint: str = "<object>",
+    profile: LangGraphProfile | None = None,
+) -> LangGraphDescriptor:
     name = type(target).__name__.lower()
     module = type(target).__module__.lower()
     is_compiled = hasattr(target, "astream") and hasattr(target, "ainvoke")
@@ -21,15 +26,24 @@ def detect_graph(target: Any, *, entrypoint: str = "<object>") -> LangGraphDescr
         if is_factory
         else GraphObjectKind.BUILDER
     )
-    if "deep" in module or "deep" in name:
-        profile = LangGraphProfile.DEEPAGENTS
-    elif "agent" in module or "agent" in name:
-        profile = LangGraphProfile.LANGCHAIN_AGENT
-        kind = GraphObjectKind.AGENT if is_compiled else kind
+    config = getattr(target, "config", {})
+    metadata = config.get("metadata", {}) if isinstance(config, dict) else {}
+    integration = str(metadata.get("ls_integration", ""))
+    if profile is not None:
+        resolved_profile = profile
+    elif integration == "deepagents" or "deep" in module or "deep" in name:
+        resolved_profile = LangGraphProfile.DEEPAGENTS
+    elif integration == "langchain_create_agent" or "agent" in module or "agent" in name:
+        resolved_profile = LangGraphProfile.LANGCHAIN_AGENT
     else:
-        profile = LangGraphProfile.LANGGRAPH
+        resolved_profile = LangGraphProfile.LANGGRAPH
+    if is_compiled and resolved_profile in {
+        LangGraphProfile.LANGCHAIN_AGENT,
+        LangGraphProfile.DEEPAGENTS,
+    }:
+        kind = GraphObjectKind.AGENT
     return LangGraphDescriptor(
-        profile=profile,
+        profile=resolved_profile,
         entrypoint=entrypoint,
         object_kind=kind,
         graph_id=str(
@@ -46,7 +60,10 @@ def detect_graph(target: Any, *, entrypoint: str = "<object>") -> LangGraphDescr
 
 
 def _schema(target: Any, name: str) -> dict[str, Any] | None:
-    value = getattr(target, name, None)
+    try:
+        value = getattr(target, name, None)
+    except Exception:
+        return None
     if value is None:
         return None
     if isinstance(value, dict):

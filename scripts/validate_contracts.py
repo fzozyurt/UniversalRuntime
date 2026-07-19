@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import yaml
@@ -72,23 +71,24 @@ def main() -> None:
     if len(todo_ids) != len(set(todo_ids)) or not all(todo_ids):
         raise SystemExit("compatibility TODO entries need unique IDs")
 
-    with tempfile.TemporaryDirectory() as output:
-        descriptor = Path(output) / "runtime.pb"
-        command = [
-            sys.executable,
-            "-m",
-            "grpc_tools.protoc",
-            "-I",
-            str(ROOT / "contracts/proto"),
-            f"--descriptor_set_out={descriptor}",
-            "--include_imports",
-            str(ROOT / "contracts/proto/runtime/v1/execution.proto"),
-            str(ROOT / "contracts/proto/runtime/v1/worker.proto"),
-        ]
-        result = subprocess.run(command, capture_output=True, text=True, check=False)  # noqa: S603
-        if result.returncode != 0:
-            raise SystemExit(f"protobuf compilation failed:\n{result.stderr}")
-
+    output = ROOT / ".contract-validation"
+    output.mkdir(exist_ok=True)
+    descriptor = output / "runtime.pb"
+    command = [
+        sys.executable,
+        "-m",
+        "grpc_tools.protoc",
+        "-I",
+        str(ROOT / "contracts/proto"),
+        f"--descriptor_set_out={descriptor}",
+        "--include_imports",
+        str(ROOT / "contracts/proto/runtime/v1/execution.proto"),
+        str(ROOT / "contracts/proto/runtime/v1/worker.proto"),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)  # noqa: S603
+    descriptor.unlink(missing_ok=True)
+    if result.returncode != 0:
+        raise SystemExit(f"protobuf compilation failed:\n{result.stderr}")
     print("contracts: valid")
 
 

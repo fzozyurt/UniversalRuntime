@@ -36,7 +36,9 @@ class TypedId:
         return self.value
 
     def __eq__(self, other: object) -> bool:
-        return self.value == (other.value if isinstance(other, TypedId) else other)
+        if isinstance(other, TypedId):
+            return type(self) is type(other) and self.value == other.value
+        return self.value == other
 
     def __hash__(self) -> int:
         return hash((type(self), self.value))

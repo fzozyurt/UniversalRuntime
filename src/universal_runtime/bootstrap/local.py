@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 
 from universal_runtime.adapters.memory.capacity import ExecutionCapacity
 from universal_runtime.adapters.memory.configuration import InMemoryApplicationConfigRepository
@@ -12,6 +13,7 @@ from universal_runtime.adapters.memory.repositories import (
     InMemoryThreadRepository,
 )
 from universal_runtime.application.runtime_service import RuntimeExecutionService
+from universal_runtime.ports.events import EventStore
 
 
 @dataclass(slots=True)
@@ -49,6 +51,6 @@ def create_local_runtime(*, max_concurrency: int = 8) -> LocalRuntime:
             threads=threads,
             runs=runs,
             commands=commands,
-            events=events,
+            events=cast("EventStore", events),
         ),
     )

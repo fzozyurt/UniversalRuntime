@@ -76,10 +76,10 @@ class InMemoryEventJournal(EventJournal, EventReplay, EventSubscription):
             if terminal:
                 return
             while True:
-                event = await queue.get()
-                if event is None:
+                received: RuntimeEvent | None = await queue.get()
+                if received is None:
                     return
-                yield event
+                yield received
         finally:
             async with self._lock:
                 self._subscribers[key].discard(queue)

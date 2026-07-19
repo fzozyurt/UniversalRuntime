@@ -54,3 +54,8 @@ node_modules/
 # Java if future SDK generation is used
 .gradle/
 target/
+
+# Workspace-local validation/build scratch
+.build-temp/
+.tmp/
+.contract-validation/

@@ -12,3 +12,11 @@ The adapter must:
 8. preserve native payload in `RuntimeEvent.native`,
 9. avoid private attribute mutation unless pinned, tested and isolated behind a compatibility shim,
 10. maintain golden tests against the official `langgraph_sdk`.
+
+## Deterministic verification
+
+`tests/test_langgraph_adapter.py` covers compiled graphs, builder/factory loading, managed local saver/store, protected configuration, separate context, values/updates/v2 stream parts, tool and subgraph namespaces, state/history/update, interrupt/resume, LangChain `create_agent` and Deep Agents profile detection.
+
+`tests/compatibility/test_langgraph_sdk.py` is the official SDK smoke surface. It runs when `UR_LANGGRAPH_SDK_URL` points at a running Gateway and is skipped otherwise.
+
+PostgreSQL saver/store wiring remains a provider boundary; the local profile uses upstream `InMemorySaver` and `InMemoryStore`, and no upstream checkpoint schema is forked.

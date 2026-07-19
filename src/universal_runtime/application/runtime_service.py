@@ -87,7 +87,7 @@ class RuntimeExecutionService:
     async def stream_events(
         self, run_id: str, after_sequence: int = -1
     ) -> AsyncIterator[RuntimeEvent]:
-        for event in await self._events.replay(run_id, after_sequence=after_sequence):
+        for event in await self._events.replay(run_id, after_sequence=after_sequence):  # type: ignore[arg-type]
             yield event
 
     @staticmethod

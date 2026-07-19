@@ -10,7 +10,13 @@ async def get_state(graph: Any, config: dict[str, Any]) -> Any:
         raise LangGraphAdapterError(
             LangGraphErrorCode.CAPABILITY_NOT_SUPPORTED, "state is not supported"
         )
-    return await graph.aget_state(config)
+    try:
+        return await graph.aget_state(config)
+    except ValueError as exc:
+        raise LangGraphAdapterError(
+            LangGraphErrorCode.CAPABILITY_NOT_SUPPORTED,
+            "state is not available without a checkpointer",
+        ) from exc
 
 
 async def get_state_history(graph: Any, config: dict[str, Any]) -> Any:
@@ -18,4 +24,10 @@ async def get_state_history(graph: Any, config: dict[str, Any]) -> Any:
         raise LangGraphAdapterError(
             LangGraphErrorCode.CAPABILITY_NOT_SUPPORTED, "state history is not supported"
         )
-    return [item async for item in graph.aget_state_history(config)]
+    try:
+        return [item async for item in graph.aget_state_history(config)]
+    except ValueError as exc:
+        raise LangGraphAdapterError(
+            LangGraphErrorCode.CAPABILITY_NOT_SUPPORTED,
+            "state history is not available without a checkpointer",
+        ) from exc

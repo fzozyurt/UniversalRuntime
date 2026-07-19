@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 
 from universal_runtime.domain.identity.identifiers import (
     ApplicationId,
@@ -54,8 +55,12 @@ class ExecutionIdentity:
             if any(value is None or not str(value) for value in values):
                 raise ValueError("complete application scope is required")
             resolved_scope = ApplicationScope(
-                resolved_workspace, project_id, application_id, revision_id, deployment_id
-            )  # type: ignore[arg-type]
+                cast(WorkspaceId, resolved_workspace),
+                cast(ProjectId, project_id),
+                cast(ApplicationId, application_id),
+                cast(RevisionId, revision_id),
+                cast(DeploymentId, deployment_id),
+            )
         if assistant_id is None or run_id is None or attempt_id is None:
             raise ValueError("execution identity requires assistant, run and attempt IDs")
         object.__setattr__(self, "scope", resolved_scope)
