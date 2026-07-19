@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: event-projector
+  namespace: universal-runtime
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: event-projector}}
+  template:
+    metadata: {labels: {app: event-projector}}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532}
+      containers:
+        - name: projector
+          image: universal-runtime:0.1.0
+          command: ["universal-runtime", "projector"]
+          envFrom:
+            - {configMapRef: {name: universal-runtime-config}}
+            - {secretRef: {name: universal-runtime-secrets}}
+          env:
+            - {name: UR_MODE, value: projector}
+            - {name: UR_INSTANCE_ID, valueFrom: {fieldRef: {fieldPath: metadata.name}}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: tmp, mountPath: /tmp}]
+      volumes: [{name: tmp, emptyDir: {}}]

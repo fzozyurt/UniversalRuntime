@@ -1,0 +1,62 @@
+apiVersion: runtime.ai/v1alpha1
+kind: RuntimeApplication
+metadata:
+  name: phase1-agent
+  project: examples
+  environment: local
+spec:
+  runtime:
+    adapter: langgraph
+    profile: local
+    language: python
+    entrypoints:
+      graphs:
+        agent: phase1_agent.graph:graph
+  discovery:
+    enabled: true
+    isolatedImport: false
+  http:
+    enabled: true
+    fastapi:
+      detect: true
+      entrypoint: phase1_agent.fastapi_app:app
+      mountPath: /http
+  execution:
+    defaultPriority: interactive
+    timeoutSeconds: 60
+    worker:
+      maxConcurrency: 2
+      drainTimeoutSeconds: 10
+    thread:
+      maxActiveRuns: 1
+  persistence:
+    checkpoint:
+      mode: platform-managed
+      provider: memory
+    store:
+      mode: platform-managed
+      provider: memory
+    applicationDatabase:
+      enabled: false
+      migrations:
+        provider: alembic
+        config: alembic.ini
+        command: upgrade head
+  queue:
+    provider: memory
+    prefix: rt
+    environment: local
+    topics: {}
+    fairness:
+      interactiveWeight: 8
+      normalWeight: 3
+      batchWeight: 1
+      agePromotionSeconds: 30
+  observability:
+    enabled: false
+    openlit: false
+    contentCapture: metadata
+  a2a:
+    enabled: false
+    streaming: false
+    agentCardPath: /.well-known/agent-card.json

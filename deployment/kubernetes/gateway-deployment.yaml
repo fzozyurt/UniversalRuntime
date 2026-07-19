@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: universal-runtime
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: gateway
+  template:
+    metadata:
+      labels:
+        app: gateway
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+      containers:
+        - name: gateway
+          image: universal-runtime:0.1.0
+          imagePullPolicy: IfNotPresent
+          command: ["universal-runtime", "gateway"]
+          envFrom:
+            - configMapRef: {name: universal-runtime-config}
+            - secretRef: {name: universal-runtime-secrets}
+          env:
+            - name: UR_MODE
+              value: gateway
+            - name: UR_INSTANCE_ID
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: {path: /ready, port: http}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /ok, port: http}
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: tmp, emptyDir: {}}

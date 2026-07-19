@@ -2,9 +2,15 @@
 set -eu
 
 MODE="${UR_MODE:-worker}"
+case "$MODE" in
+  validate|inspect|migrate|gateway|dispatcher|worker|projector|api|standalone) ;;
+  *) echo "unsupported UR_MODE: $MODE" >&2; exit 64 ;;
+esac
 
-if [ "${UR_OBSERVABILITY_ENABLED:-false}" = "true" ]; then
-  exec opentelemetry-instrument runtime-launcher --mode "$MODE" "$@"
+set -- universal-runtime "$MODE" "$@"
+
+if [ "${UR_OBSERVABILITY_ENABLED:-false}" = "true" ] && command -v opentelemetry-instrument >/dev/null 2>&1; then
+  set -- opentelemetry-instrument "$@"
 fi
 
-exec runtime-launcher --mode "$MODE" "$@"
+exec "$@"

@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: universal-runtime
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - gateway-deployment.yaml
+  - gateway-service.yaml
+  - dispatcher-deployment.yaml
+  - worker-deployment.yaml
+  - projector-deployment.yaml
+  - migration-job.yaml
+  - haproxy-deployment.yaml
+  - haproxy-service.yaml
+  - pdb.yaml
+  - network-policy.yaml
+configMapGenerator:
+  - name: haproxy-config
+    files:
+      - haproxy.cfg

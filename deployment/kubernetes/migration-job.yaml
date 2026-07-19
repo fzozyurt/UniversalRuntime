@@ -1,0 +1,18 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: universal-runtime-migrate
+  namespace: universal-runtime
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: migrate
+          image: universal-runtime:0.1.0
+          command: ["universal-runtime", "migrate", "--config", "/opt/universal-runtime/runtime.yaml", "--application-id", "platform", "--environment", "production"]
+          envFrom:
+            - {configMapRef: {name: universal-runtime-config}}
+            - {secretRef: {name: universal-runtime-secrets}}

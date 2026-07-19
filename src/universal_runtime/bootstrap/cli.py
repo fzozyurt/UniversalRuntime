@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from collections.abc import Sequence
+from dataclasses import asdict
 from pathlib import Path
+from typing import Any, cast
 
 import yaml
 from jsonschema import Draft202012Validator
@@ -16,15 +19,20 @@ SCHEMA_PATH = PROJECT_ROOT / "contracts" / "config" / "runtime-application.schem
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="runtime-launcher")
+    parser = argparse.ArgumentParser(prog="universal-runtime")
     parser.add_argument("--version", action="version", version="universal-runtime 0.1.0")
     commands = parser.add_subparsers(dest="command")
     commands.add_parser("info", help="print runtime bootstrap information")
+    commands.add_parser("validate", help="validate UR_CONFIG_PATH")
     commands.add_parser("standalone", help="create and shut down the local runtime composition")
     inspect = commands.add_parser("inspect", help="discover an application HTTP surface")
     inspect.add_argument("path", type=Path)
     inspect.add_argument("--entrypoint")
     inspect.add_argument("--isolated-import", action="store_true")
+    graph_inspect = commands.add_parser(
+        "inspect-graph", help="inspect an application graph entrypoint"
+    )
+    graph_inspect.add_argument("--entrypoint", required=True)
     migrate = commands.add_parser("migrate", help="run application migrations")
     migrate.add_argument("--config", required=True)
     migrate.add_argument("--application-id", required=True)
@@ -35,6 +43,9 @@ def _parser() -> argparse.ArgumentParser:
     api.add_argument("--host", default="127.0.0.1")
     api.add_argument("--port", type=int, default=8000)
     commands.add_parser("worker", help="start the runtime worker composition")
+    commands.add_parser("gateway", help="start the Gateway HTTP process")
+    commands.add_parser("dispatcher", help="start the dispatcher process")
+    commands.add_parser("projector", help="start the event projector process")
     validate = commands.add_parser("validate-config", help="validate a runtime YAML file")
     validate.add_argument("path", type=Path)
     return parser
@@ -42,7 +53,8 @@ def _parser() -> argparse.ArgumentParser:
 
 def _validate_config(path: Path) -> int:
     document = yaml.safe_load(path.read_text(encoding="utf-8"))
-    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    schema_path = Path(os.environ.get("UR_CONTRACT_SCHEMA_PATH", str(SCHEMA_PATH)))
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
     errors = sorted(Draft202012Validator(schema).iter_errors(document), key=str)
     if errors:
         for error in errors:
@@ -53,12 +65,21 @@ def _validate_config(path: Path) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    effective_argv = list(argv) if argv is not None else None
+    if not effective_argv and os.environ.get("UR_MODE"):
+        effective_argv = [os.environ["UR_MODE"]]
+    args = _parser().parse_args(effective_argv)
     if args.command == "validate-config":
         return _validate_config(args.path)
     if args.command == "info":
         print(json.dumps({"version": "0.1.0", "profile": "bootstrap"}))
         return 0
+    if args.command == "validate":
+        config_path = Path(os.environ.get("UR_CONFIG_PATH", "runtime.yaml"))
+        if not config_path.exists():
+            print(f"config: missing ({config_path})")
+            return 1
+        return _validate_config(config_path)
     if args.command == "standalone":
         import asyncio
 
@@ -71,13 +92,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "inspect":
         try:
-            descriptor = detect_asgi_application(
+            asgi_descriptor = detect_asgi_application(
                 args.path, explicit_entrypoint=args.entrypoint, isolated_import=args.isolated_import
             )
         except Exception as exc:
             print(str(exc))
             return 1
-        print(json.dumps(descriptor.to_json(), separators=(",", ":")))
+        print(json.dumps(asgi_descriptor.to_json(), separators=(",", ":")))
+        return 0
+    if args.command == "inspect-graph":
+        from importlib import import_module
+
+        from universal_runtime.adapters.langgraph.detector import detect_graph
+
+        module_name, attribute = args.entrypoint.split(":", 1)
+        target = getattr(import_module(module_name), attribute)
+        graph_descriptor = detect_graph(target, entrypoint=args.entrypoint)
+        print(json.dumps(asdict(graph_descriptor), separators=(",", ":"), default=str))
         return 0
     if args.command == "api":
         import uvicorn
@@ -90,9 +121,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             port=args.port,
         )
         return 0
-    if args.command == "worker":
-        print(json.dumps({"profile": "worker", "status": "composition-required"}))
-        return 0
+    if args.command in {"gateway", "dispatcher", "projector", "worker"}:
+        service_main: Any
+        if args.command == "gateway":
+            from universal_runtime.services.gateway.main import main as service_main
+        elif args.command == "dispatcher":
+            from universal_runtime.services.dispatcher.main import main as service_main
+        elif args.command == "projector":
+            from universal_runtime.services.event_projector.main import main as service_main
+        else:
+            from universal_runtime.services.worker.main import main as service_main
+        return cast(int, service_main(run_forever=True))
     if args.command == "migrate":
         print(
             json.dumps(

@@ -34,3 +34,32 @@ def test_runtime_config_loader_resolves_and_redacts() -> None:
         loader.redact({"api_key": "secret", "nested": {"password": "hidden"}})["api_key"]
         == "[REDACTED]"
     )
+
+
+def test_launcher_config_validates_environment_values() -> None:
+    from universal_runtime.bootstrap.runtime_config import LauncherConfig
+
+    config = LauncherConfig.from_environment(
+        {"UR_MODE": "gateway", "UR_GATEWAY_PORT": "18080", "UR_WORKER_MAX_CONCURRENCY": "2"}
+    )
+    config.validate()
+    assert config.port == 18080
+    assert config.worker_max_concurrency == 2
+
+
+def test_launcher_config_rejects_unknown_mode() -> None:
+    import pytest
+
+    from universal_runtime.bootstrap.runtime_config import LauncherConfig
+
+    with pytest.raises(ValueError, match="unsupported UR_MODE"):
+        LauncherConfig.from_environment({"UR_MODE": "unknown"}).validate()
+
+
+def test_launcher_config_rejects_invalid_ports() -> None:
+    import pytest
+
+    from universal_runtime.bootstrap.runtime_config import LauncherConfig
+
+    with pytest.raises(ValueError, match="ports"):
+        LauncherConfig.from_environment({"UR_GATEWAY_PORT": "0"}).validate()

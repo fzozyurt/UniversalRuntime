@@ -27,3 +27,12 @@ class WorkerServer:
         health_servicer.set("", health_pb2.HealthCheckResponse.SERVING)
         health_pb2_grpc.add_HealthServicer_to_server(health_servicer, server)
         return cls(worker, server)
+
+    async def start(self, host: str, port: int) -> None:
+        self.server.add_insecure_port(f"{host}:{port}")
+        await self.server.start()
+        await self.server.wait_for_termination()
+
+    async def stop(self, grace: float) -> None:
+        await self.worker.drain(grace)
+        await self.server.stop(grace)

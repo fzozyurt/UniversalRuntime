@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dispatcher
+  namespace: universal-runtime
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: dispatcher}}
+  template:
+    metadata: {labels: {app: dispatcher}}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532}
+      containers:
+        - name: dispatcher
+          image: universal-runtime:0.1.0
+          command: ["universal-runtime", "dispatcher"]
+          envFrom:
+            - {configMapRef: {name: universal-runtime-config}}
+            - {secretRef: {name: universal-runtime-secrets}}
+          env:
+            - {name: UR_MODE, value: dispatcher}
+            - {name: UR_INSTANCE_ID, valueFrom: {fieldRef: {fieldPath: metadata.name}}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: tmp, mountPath: /tmp}]
+      volumes: [{name: tmp, emptyDir: {}}]

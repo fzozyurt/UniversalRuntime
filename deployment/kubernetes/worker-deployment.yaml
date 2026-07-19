@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: universal-runtime
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: worker}}
+  template:
+    metadata: {labels: {app: worker}}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 45
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532}
+      containers:
+        - name: worker
+          image: universal-runtime-agent-base:0.1.0
+          command: ["universal-runtime", "worker"]
+          envFrom:
+            - {configMapRef: {name: universal-runtime-config}}
+            - {secretRef: {name: universal-runtime-secrets}}
+          env:
+            - {name: UR_MODE, value: worker}
+            - {name: UR_INSTANCE_ID, valueFrom: {fieldRef: {fieldPath: metadata.name}}}
+          ports: [{name: grpc, containerPort: 9090}]
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: tmp, mountPath: /tmp}]
+      volumes: [{name: tmp, emptyDir: {}}]

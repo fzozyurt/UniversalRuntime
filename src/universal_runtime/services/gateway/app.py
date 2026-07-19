@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -73,7 +74,9 @@ def create_app(
     @app.middleware("http")
     async def request_id(request: Request, call_next: Any) -> Any:
         request.state.request_id = request.headers.get("x-request-id") or str(CommandId.new())
-        return await call_next(request)
+        response = await call_next(request)
+        response.headers["x-runtime-instance-id"] = os.environ.get("UR_INSTANCE_ID", "local")
+        return response
 
     @app.exception_handler(RuntimeFailure)
     async def runtime_failure(request: Request, exc: RuntimeFailure) -> JSONResponse:
@@ -113,6 +116,10 @@ def create_app(
     @app.get("/ok")
     async def health() -> dict[str, bool]:
         return {"ok": True}
+
+    @app.get("/ready")
+    async def readiness() -> dict[str, bool]:
+        return {"ready": True}
 
     @app.get("/info")
     async def info() -> dict[str, Any]:
@@ -376,7 +383,8 @@ def _native(data: Any, request: Request) -> NativeResponse:
 def _load_schema() -> dict[str, Any]:
     import json as json_module
 
-    return cast(dict[str, Any], json_module.loads(SCHEMA_PATH.read_text(encoding="utf-8")))
+    schema_path = Path(os.environ.get("UR_CONTRACT_SCHEMA_PATH", str(SCHEMA_PATH)))
+    return cast(dict[str, Any], json_module.loads(schema_path.read_text(encoding="utf-8")))
 
 
 def _validation_errors(schema: dict[str, Any], payload: JsonObject) -> list[JsonObject]:

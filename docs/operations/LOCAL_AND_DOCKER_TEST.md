@@ -15,6 +15,20 @@ No PostgreSQL, Kafka or Docker is required for this profile.
 
 ## Docker topology
 
+The checked-in Compose topology is under `deployment/compose/`. It uses the
+already available, digest-pinned Python, PostgreSQL and Kafka images; set a
+password explicitly before starting it:
+
+```bash
+export POSTGRES_PASSWORD='local-only-change-me'
+docker compose -f deployment/compose/docker-compose.yml up --build -d
+```
+
+The platform image is built from `container/Dockerfile`; user graph code belongs
+in an application image based on `container/Dockerfile.agent-base`. The
+deterministic `examples/phase1-agent` app exercises both a compiled LangGraph
+and a LangChain `create_agent` with a model-free tool call.
+
 Target Compose topology:
 
 - HAProxy

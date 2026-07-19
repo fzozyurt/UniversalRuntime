@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: universal-runtime-config
+  namespace: universal-runtime
+data:
+  UR_PROFILE: production
+  UR_TOPIC_PREFIX: rt
+  UR_KAFKA_ENVIRONMENT: production
+  UR_GATEWAY_PORT: "8080"
+  UR_GRPC_PORT: "9090"
+  UR_WORKER_MAX_CONCURRENCY: "8"
+  UR_WORKER_DRAIN_TIMEOUT_SECONDS: "30"
+  UR_CONTRACT_SCHEMA_PATH: /opt/universal-runtime/contracts/config/runtime-application.schema.json

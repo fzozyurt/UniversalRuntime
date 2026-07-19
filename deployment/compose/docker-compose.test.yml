@@ -1,0 +1,27 @@
+services:
+  postgres:
+    environment:
+      POSTGRES_DB: runtime_test
+    volumes:
+      - postgres-test-data:/var/lib/postgresql/data
+  gateway-1:
+    environment:
+      UR_PROFILE: local
+  gateway-2:
+    environment:
+      UR_PROFILE: local
+  dispatcher-1:
+    environment:
+      UR_PROFILE: local
+  dispatcher-2:
+    environment:
+      UR_PROFILE: local
+  worker-1:
+    environment:
+      UR_PROFILE: local
+  worker-2:
+    environment:
+      UR_PROFILE: local
+
+volumes:
+  postgres-test-data:
