@@ -3,20 +3,28 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
 from universal_runtime.domain.errors import ErrorCode, RuntimeFailure
 from universal_runtime.domain.events import RuntimeEvent, RuntimeEventDraft, RuntimeEventType
-from universal_runtime.domain.execution import Run, RunError, RunStatus, Thread
-from universal_runtime.domain.execution.requests import ExecutionRequest, RunCommand
+from universal_runtime.domain.execution import (
+    ExecutionRequest,
+    ExecutionTarget,
+    Run,
+    RunError,
+    RunStatus,
+    Thread,
+)
+from universal_runtime.domain.execution.requests import RunCommand
 from universal_runtime.domain.identity import CommandId, RunId, ThreadId, WorkerId
 from universal_runtime.domain.primitives.json_types import JsonObject, JsonValue
 from universal_runtime.ports.events import EventJournal, EventReplay, EventSubscription
 from universal_runtime.ports.outbox import OutboxMessage, OutboxRepository
 from universal_runtime.ports.queue import RunCommandQueue
 from universal_runtime.ports.registry import AdapterRegistry
-from universal_runtime.ports.repositories import RunRepository, ThreadRepository
+from universal_runtime.ports.repositories import AssistantRepository, RunRepository, ThreadRepository
 from universal_runtime.ports.runtime_adapter import RuntimeAdapter
 
 
@@ -38,6 +46,7 @@ class RuntimeExecutionService:
         replay: EventReplay | None = None,
         subscription: EventSubscription | None = None,
         outbox: OutboxRepository | None = None,
+        assistants: AssistantRepository | None = None,
         adapters: AdapterRegistry | None = None,
         capacity: Any | None = None,
     ) -> None:
@@ -48,6 +57,7 @@ class RuntimeExecutionService:
         self._replay = replay
         self._subscription = subscription
         self._outbox = outbox
+        self._assistants = assistants
         self._adapters = adapters
         self._capacity = capacity
         self._worker_task: asyncio.Task[None] | None = None
@@ -65,9 +75,44 @@ class RuntimeExecutionService:
         )
         return await self._threads.create(thread)
 
+    async def _resolve_request(self, request: ExecutionRequest) -> ExecutionRequest:
+        """Resolve assistant config and pin the executable graph before persistence.
+
+        The transport may omit a graph target for backwards compatibility. The
+        application service owns resolution so every ingress surface (native HTTP,
+        LangGraph compatibility, A2A and direct SDK) produces the same immutable run.
+        """
+        if self._assistants is None:
+            return request
+        assistant = await self._assistants.get(str(request.identity.assistant_id))
+        target = request.target
+        if target.graph_id == "default":
+            target = ExecutionTarget(assistant.graph_id, assistant.version)
+        elif target.graph_id != assistant.graph_id:
+            raise RuntimeFailure(
+                ErrorCode.INVALID_EXECUTION_INPUT,
+                "execution target graph does not match assistant graph",
+                details={
+                    "assistant_id": str(assistant.assistant_id),
+                    "assistant_graph_id": assistant.graph_id,
+                    "requested_graph_id": target.graph_id,
+                },
+            )
+        config = {**assistant.config, **request.config}
+        context = {**assistant.context, **request.context}
+        metadata = {**assistant.metadata, **request.metadata}
+        return replace(
+            request,
+            target=ExecutionTarget(target.graph_id, assistant.version),
+            config=config,
+            context=context,
+            metadata=metadata,
+        )
+
     async def start_run(
         self, request: ExecutionRequest, *, outbox: OutboxRepository | None = None
     ) -> Run:
+        request = await self._resolve_request(request)
         now = _now()
         thread_id = request.identity.thread_id
         if thread_id is not None:
@@ -80,6 +125,7 @@ class RuntimeExecutionService:
             metadata=request.metadata,
             created_at=now,
             updated_at=now,
+            target=request.target,
         )
         created = await self._runs.create(run)
         try:
@@ -88,7 +134,11 @@ class RuntimeExecutionService:
                 RuntimeEventDraft(
                     request.identity,
                     RuntimeEventType.RUN_QUEUED,
-                    data={"assistant_id": str(request.identity.assistant_id)},
+                    data={
+                        "assistant_id": str(request.identity.assistant_id),
+                        "assistant_version": request.target.assistant_version,
+                        "graph_id": request.target.graph_id,
+                    },
                 )
             )
             if selected_outbox is not None:
@@ -100,6 +150,8 @@ class RuntimeExecutionService:
                         payload={
                             "run_id": str(request.identity.run_id),
                             "assistant_id": str(request.identity.assistant_id),
+                            "assistant_version": request.target.assistant_version,
+                            "graph_id": request.target.graph_id,
                             "thread_id": (
                                 str(request.identity.thread_id)
                                 if request.identity.thread_id is not None
@@ -149,7 +201,7 @@ class RuntimeExecutionService:
             return run
         adapter = self._active_adapters.get(str(run.run_id))
         if adapter is not None:
-            request = ExecutionRequest(identity=run.identity)
+            request = ExecutionRequest(identity=run.identity, target=run.target)
             await adapter.cancel(request)
         cancelled = run.cancel(_now())
         if cancelled is not run:
@@ -167,9 +219,15 @@ class RuntimeExecutionService:
         return cancelled
 
     async def resume_run(self, request: ExecutionRequest) -> Run:
+        request = await self._resolve_request(request)
         run = await self._runs.get(str(request.identity.run_id))
         if run.status is not RunStatus.INTERRUPTED:
             raise RuntimeFailure(ErrorCode.INVALID_EXECUTION_INPUT, "run is not interrupted")
+        if request.target != run.target:
+            raise RuntimeFailure(
+                ErrorCode.INVALID_EXECUTION_INPUT,
+                "resume must use the graph and assistant version pinned to the original run",
+            )
         now = _now()
         await self._commands.publish(
             RunCommand(
@@ -208,8 +266,13 @@ class RuntimeExecutionService:
                 receipt = await self._commands.receive(WorkerId.parse("local-worker"))
             except (RuntimeFailure, asyncio.CancelledError):
                 return
-            adapter = self._adapters.get(str(receipt.identity.assistant_id))
-            _LOGGER.info("runtime command received run_id=%s", receipt.identity.run_id)
+            request = receipt.command.request
+            adapter = self._adapters.get(request.target.graph_id)
+            _LOGGER.info(
+                "runtime command received run_id=%s graph_id=%s",
+                receipt.identity.run_id,
+                request.target.graph_id,
+            )
             execution: asyncio.Task[None] | None = None
             try:
                 if self._capacity is None:
@@ -259,17 +322,7 @@ class RuntimeExecutionService:
                     elif event.type is RuntimeEventType.RUN_CANCELLED:
                         await self._runs.update(current.cancel(_now()))
                     elif event.type is RuntimeEventType.RUN_INTERRUPTED:
-                        await self._runs.update(
-                            Run(
-                                current.identity,
-                                RunStatus.INTERRUPTED,
-                                current.metadata,
-                                current.created_at,
-                                _now(),
-                                current.result,
-                                current.error,
-                            )
-                        )
+                        await self._runs.update(current.mark_interrupted(_now()))
                     else:
                         await self._runs.update(
                             current.fail(
