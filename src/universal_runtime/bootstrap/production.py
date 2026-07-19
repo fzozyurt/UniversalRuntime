@@ -37,9 +37,11 @@ def _application_scope() -> ApplicationScope:
 
 
 def create_production_runtime() -> LocalRuntime:
-    database_url = os.environ.get("UR_DATABASE_URL")
+    database_url = os.environ.get("UR_PLATFORM_DATABASE_URL") or os.environ.get(
+        "UR_DATABASE_URL"
+    )
     if not database_url:
-        raise RuntimeError("UR_DATABASE_URL is required in production profile")
+        raise RuntimeError("UR_PLATFORM_DATABASE_URL or UR_DATABASE_URL is required")
     engine = create_engine(
         database_url,
         pool_size=int(os.environ.get("UR_DB_POOL_SIZE", "10")),
@@ -82,6 +84,7 @@ def create_production_runtime() -> LocalRuntime:
             replay=events,
             subscription=events,
             assistants=assistants,
+            execution_scope=scope,
             adapters=adapters,
             capacity=capacity,
         ),
