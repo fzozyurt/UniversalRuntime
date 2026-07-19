@@ -7,12 +7,7 @@ from datetime import UTC, datetime
 from universal_runtime.domain.errors import ErrorCode, RuntimeFailure
 from universal_runtime.domain.events import RuntimeEvent
 from universal_runtime.domain.execution import ExecutionRequest
-from universal_runtime.domain.identity import (
-    AssistantId,
-    ExecutionIdentity,
-    ThreadId,
-    new_identifier,
-)
+from universal_runtime.domain.identity import EventId, ExecutionIdentity, ThreadId
 from universal_runtime.domain.resources import (
     RunRecord,
     ThreadRecord,
@@ -59,7 +54,7 @@ class RuntimeExecutionService:
         run = RunRecord(
             run_id=request.identity.run_id,
             thread_id=thread_id,
-            assistant_id=AssistantId(request.assistant_id),
+            assistant_id=request.identity.assistant_id,
             metadata=dict(request.metadata),
         )
         created = await self._runs.create(run)
@@ -92,13 +87,13 @@ class RuntimeExecutionService:
     async def stream_events(
         self, run_id: str, after_sequence: int = -1
     ) -> AsyncIterator[RuntimeEvent]:
-        for event in await self._events.replay(run_id, after_sequence):
+        for event in await self._events.replay(run_id, after_sequence=after_sequence):
             yield event
 
     @staticmethod
     def _event(request: ExecutionRequest, event_type: str, sequence: int) -> RuntimeEvent:
         return RuntimeEvent(
-            event_id=new_identifier(),
+            event_id=EventId.new(),
             sequence=sequence,
             timestamp=datetime.now(UTC),
             identity=request.identity,
@@ -109,7 +104,7 @@ class RuntimeExecutionService:
     def _event_from_run(self, run: RunRecord, event_type: str, sequence: int) -> RuntimeEvent:
         identity = self._identities[str(run.run_id)]
         return RuntimeEvent(
-            event_id=new_identifier(),
+            event_id=EventId.new(),
             sequence=sequence,
             timestamp=datetime.now(UTC),
             identity=identity,
