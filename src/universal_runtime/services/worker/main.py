@@ -37,13 +37,13 @@ def main(*, run_forever: bool = True) -> int:
 
 async def _serve(config: LauncherConfig) -> None:
     entrypoints = _entrypoints()
-    database_url = os.environ["UR_DATABASE_URL"]
+    database_url = os.environ.get("UR_STATE_DATABASE_URL") or os.environ["UR_DATABASE_URL"]
     engine = create_engine(
         database_url,
         pool_size=int(os.environ.get("UR_WORKER_DB_POOL_SIZE", "30")),
         max_overflow=int(os.environ.get("UR_WORKER_DB_MAX_OVERFLOW", "10")),
     )
-    context = managed_langgraph_persistence(
+    persistence_context = managed_langgraph_persistence(
         database_url,
         migration_engine=engine,
         application_id=os.environ.get("UR_APPLICATION_ID", "default"),
@@ -51,8 +51,8 @@ async def _serve(config: LauncherConfig) -> None:
         workspace_key=os.environ.get("UR_WORKSPACE_KEY", "default"),
         application_key=os.environ.get("UR_APPLICATION_ID", "default"),
     )
-    persistence = await context.__aenter__()
-    adapters = {}
+    persistence = await persistence_context.__aenter__()
+    adapters: dict[str, LangGraphAdapter] = {}
     for entrypoint in entrypoints:
         module_name, attribute = entrypoint.split(":", 1)
         target = getattr(importlib.import_module(module_name), attribute)
@@ -61,38 +61,60 @@ async def _serve(config: LauncherConfig) -> None:
             persistence_mode="platform-managed",
             providers=postgres_persistence(persistence.checkpointer, persistence.store),
         )
-        adapters[adapter.descriptor.graph_id] = adapter
+        graph_id = adapter.descriptor.graph_id
+        if graph_id in adapters:
+            raise RuntimeError(f"duplicate graph_id in application image: {graph_id}")
+        adapters[graph_id] = adapter
+
     server = create_server(adapters)
     await server.start_listening(config.grpc_host, config.grpc_port)
-    for adapter in adapters.values():
-        await _register_with_gateway(adapter, config)
+    await _register_with_gateway(adapters, server, config)
     stopped = asyncio.Event()
     loop = asyncio.get_running_loop()
     loop.add_signal_handler(signal.SIGTERM, stopped.set)
     loop.add_signal_handler(signal.SIGINT, stopped.set)
-    await stopped.wait()
-    await server.stop(config.worker_drain_timeout_seconds)
-    await context.__aexit__(None, None, None)
-    await engine.dispose()
+    try:
+        await stopped.wait()
+    finally:
+        await server.stop(config.worker_drain_timeout_seconds)
+        await persistence_context.__aexit__(None, None, None)
+        await engine.dispose()
 
 
-async def _register_with_gateway(adapter: LangGraphAdapter, config: LauncherConfig) -> None:
-    """Advertise the worker and graph capability to the Gateway when configured."""
+async def _register_with_gateway(
+    adapters: dict[str, LangGraphAdapter], server: WorkerServer, config: LauncherConfig
+) -> None:
+    """Advertise one application deployment replica and its graph catalog."""
     url = os.environ.get("UR_GATEWAY_REGISTER_URL")
     if not url:
         return
-    manifest = adapter.manifest
+    manifests = {
+        graph_id: {
+            "adapter_id": adapter.manifest.adapter_id,
+            "adapter_version": adapter.manifest.adapter_version,
+            "profiles": sorted(adapter.manifest.supported_profiles),
+            "capabilities": asdict(adapter.manifest.capabilities),
+        }
+        for graph_id, adapter in adapters.items()
+    }
+    target = os.environ.get(
+        "UR_WORKER_ADVERTISE_TARGET", f"{config.grpc_host}:{config.grpc_port}"
+    )
     payload = {
         "worker_id": os.environ.get("UR_INSTANCE_ID", "worker"),
-        "target": os.environ.get("UR_WORKER_ADVERTISE_TARGET", f"{config.grpc_host}:{config.grpc_port}"),
+        "target": target,
+        "grpc_target": target,
+        "workspace_id": os.environ.get("UR_WORKSPACE_ID", "default"),
+        "project_id": os.environ.get("UR_PROJECT_ID", "default"),
         "application_id": os.environ.get("UR_APPLICATION_ID", "default"),
-        "graph_id": adapter.descriptor.graph_id,
-        "manifest": {
-            "adapter_id": manifest.adapter_id,
-            "adapter_version": manifest.adapter_version,
-            "profiles": list(manifest.supported_profiles),
-            "capabilities": asdict(manifest.capabilities),
-        },
+        "revision_id": os.environ.get("UR_REVISION_ID", "active"),
+        "deployment_id": os.environ.get("UR_DEPLOYMENT_ID", "local"),
+        "graph_ids": sorted(adapters),
+        "manifests": manifests,
+        "max_concurrency": server.worker.max_concurrency,
+        "active_executions": server.worker.active_executions,
+        "available_slots": server.worker.available_slots,
+        "status": "ready",
     }
     timeout = httpx.Timeout(3.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
@@ -109,11 +131,13 @@ async def _register_with_gateway(adapter: LangGraphAdapter, config: LauncherConf
             raise RuntimeError(f"worker registration failed: {url}") from last_error
 
 
-def _entrypoints() -> list[str]:
-    raw = os.environ.get("UR_APPLICATION_ENTRYPOINTS") or os.environ.get("UR_APPLICATION_ENTRYPOINT")
+def _entrypoints() -> tuple[str, ...]:
+    raw = os.environ.get("UR_APPLICATION_ENTRYPOINTS") or os.environ.get(
+        "UR_APPLICATION_ENTRYPOINT"
+    )
     if not raw:
         raise RuntimeError("UR_APPLICATION_ENTRYPOINT or UR_APPLICATION_ENTRYPOINTS is required")
-    return [item.strip() for item in raw.split(",") if item.strip()]
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
 
 
 __all__ = ["main"]
