@@ -126,6 +126,10 @@ class Dispatcher:
                     RuntimeEventType(event.type),
                     tuple(event.namespace),
                     value_to_python(event.data),
+                    {
+                        key: value_to_python(value)
+                        for key, value in event.native.fields.items()
+                    },
                 )
                 await self.events.append(draft)
                 if event.type == "state.values":

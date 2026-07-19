@@ -30,6 +30,9 @@ from universal_runtime.domain.identity import (
     WorkspaceId,
 )
 from universal_runtime.ports.runtime_adapter import RuntimeAdapter
+from universal_runtime.telemetry.bootstrap import initialize
+from universal_runtime.telemetry.logging import configure_logging
+from universal_runtime.telemetry.tracing import record_failure, runtime_run_span
 
 from .payloads import python_to_value, value_to_python
 
@@ -199,14 +202,17 @@ class ExecutionServicer(execution_pb2_grpc.ExecutionServiceServicer):
         del context
         await self.worker.acquire()
         self.worker.register_running(request.identity.run_id)
+        telemetry = initialize(component="worker")
+        configure_logging()
         try:
-            adapter = self._adapter_for(request.identity.assistant_id)
-            output = await adapter.invoke(_request_from_proto(request))
-            return execution_pb2.InvokeResponse(
-                run_id=request.identity.run_id,
-                status="accepted",
-                output=python_to_value(output),
-            )
+            with runtime_run_span(telemetry.tracer, {"runtime.run_id": request.identity.run_id, "runtime.assistant_id": request.identity.assistant_id}) as current_span:
+                try:
+                    adapter = self._adapter_for(request.identity.assistant_id)
+                    output = await adapter.invoke(_request_from_proto(request))
+                    return execution_pb2.InvokeResponse(run_id=request.identity.run_id, status="accepted", output=python_to_value(output))
+                except Exception as exc:
+                    record_failure(current_span, exc, error_code="RUNTIME_EXECUTION_FAILED")
+                    raise
         finally:
             self.worker.unregister_running(request.identity.run_id)
             self.worker.release()
@@ -228,6 +234,7 @@ class ExecutionServicer(execution_pb2_grpc.ExecutionServiceServicer):
                 event.identity.CopyFrom(request.invocation.identity)
                 event.timestamp.FromDatetime(datetime.now(UTC))
                 event.data.CopyFrom(python_to_value(draft.data))
+                event.native.update(draft.native)
                 yield event
                 sequence += 1
         finally:
