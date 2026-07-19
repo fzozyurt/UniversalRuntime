@@ -1,4 +1,4 @@
-# Python
+﻿# Python
 __pycache__/
 *.py[cod]
 *.pyo
@@ -40,7 +40,11 @@ artifacts/
 
 # Generated protobuf / OpenAPI clients
 generated/
+!src/universal_runtime/adapters/grpc/generated/
+!src/universal_runtime/adapters/grpc/generated/**/*.py
 contracts/generated/
+!src/universal_runtime/adapters/grpc/generated/
+!src/universal_runtime/adapters/grpc/generated/**/*.py
 
 # Docker / local data
 .local/
@@ -59,3 +63,4 @@ target/
 .build-temp/
 .tmp/
 .contract-validation/
+

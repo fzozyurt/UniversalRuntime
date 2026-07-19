@@ -46,3 +46,7 @@ class RunCommandReceipt:
     delivery_count: int
     leased_at: datetime
     lease_expires_at: datetime
+
+    @property
+    def identity(self) -> ExecutionIdentity:
+        return self.command.identity

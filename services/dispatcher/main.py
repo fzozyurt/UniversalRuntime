@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+from universal_runtime.adapters.kafka import KafkaRunCommandQueue, TopicNames
+
+
+def create_dispatch_queue() -> KafkaRunCommandQueue:
+    return KafkaRunCommandQueue()
+
 
 def main() -> int:
-    """Start the dispatcher composition root placeholder."""
+    TopicNames.from_config()
     return 0
 
 

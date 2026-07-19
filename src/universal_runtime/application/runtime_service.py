@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from universal_runtime.domain.errors import ErrorCode, RuntimeFailure
 from universal_runtime.domain.events import RuntimeEvent, RuntimeEventDraft, RuntimeEventType
 from universal_runtime.domain.execution import Run, RunError, Thread
-from universal_runtime.domain.execution.requests import ExecutionRequest
+from universal_runtime.domain.execution.requests import ExecutionRequest, RunCommand
 from universal_runtime.domain.identity import CommandId, RunId, ThreadId
 from universal_runtime.domain.primitives.json_types import JsonObject
 from universal_runtime.ports.events import EventJournal, EventReplay, EventSubscription
@@ -95,7 +95,16 @@ class RuntimeExecutionService:
                     )
                 )
             else:
-                await self._commands.publish(request)
+                await self._commands.publish(
+                    RunCommand(
+                        command_id=CommandId.new(),
+                        identity=request.identity,
+                        request=request,
+                        priority=request.priority,
+                        available_at=now,
+                        created_at=now,
+                    )
+                )
             await self._journal.append(
                 RuntimeEventDraft(
                     request.identity,
