@@ -1,0 +1,21 @@
+from __future__ import annotations
+
+from typing import Any
+
+from universal_runtime.adapters.langgraph.errors import LangGraphAdapterError, LangGraphErrorCode
+
+
+async def get_state(graph: Any, config: dict[str, Any]) -> Any:
+    if not hasattr(graph, "aget_state"):
+        raise LangGraphAdapterError(
+            LangGraphErrorCode.CAPABILITY_NOT_SUPPORTED, "state is not supported"
+        )
+    return await graph.aget_state(config)
+
+
+async def get_state_history(graph: Any, config: dict[str, Any]) -> Any:
+    if not hasattr(graph, "aget_state_history"):
+        raise LangGraphAdapterError(
+            LangGraphErrorCode.CAPABILITY_NOT_SUPPORTED, "state history is not supported"
+        )
+    return [item async for item in graph.aget_state_history(config)]
