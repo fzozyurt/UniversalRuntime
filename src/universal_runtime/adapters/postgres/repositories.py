@@ -16,7 +16,14 @@ from universal_runtime.adapters.postgres.models import (
 )
 from universal_runtime.domain.assistants import Assistant
 from universal_runtime.domain.errors import ErrorCode, RuntimeFailure
-from universal_runtime.domain.execution import Run, RunError, RunStatus, Thread, ThreadStatus
+from universal_runtime.domain.execution import (
+    ExecutionTarget,
+    Run,
+    RunError,
+    RunStatus,
+    Thread,
+    ThreadStatus,
+)
 from universal_runtime.domain.identity import (
     ApplicationId,
     ApplicationScope,
@@ -44,6 +51,11 @@ class PostgresAssistantRepository:
             async with self._sessions() as session:
                 async with session.begin():
                     row = await session.get(AssistantRow, str(assistant.assistant_id))
+                    if row is not None and row.application_id != self._application_id:
+                        raise RuntimeFailure(
+                            ErrorCode.INVALID_EXECUTION_INPUT,
+                            "assistant identifier is already used by another application",
+                        )
                     if row is None:
                         session.add(
                             AssistantRow(
@@ -68,11 +80,12 @@ class PostgresAssistantRepository:
             # The first committed row is the authoritative registration.
             return await self.get(str(assistant.assistant_id))
         return await self.get(str(assistant.assistant_id))
+
     async def get(self, assistant_id: str) -> Assistant:
         async with self._sessions() as session:
             row = await session.get(AssistantRow, str(assistant_id))
             version = None
-            if row is not None:
+            if row is not None and row.application_id == self._application_id:
                 version = (
                     await session.execute(
                         select(AssistantVersionRow).where(
@@ -81,7 +94,7 @@ class PostgresAssistantRepository:
                         )
                     )
                 ).scalar_one_or_none()
-            if row is None or version is None:
+            if row is None or row.application_id != self._application_id or version is None:
                 raise RuntimeFailure(
                     ErrorCode.RESOURCE_NOT_FOUND, f"assistant not found: {assistant_id}"
                 )
@@ -99,11 +112,10 @@ class PostgresAssistantRepository:
     async def all(self) -> tuple[Assistant, ...]:
         async with self._sessions() as session:
             result = await session.execute(
-                text("SELECT id FROM rt_core.assistants WHERE application_id = :application_id"),
-                {"application_id": self._application_id},
+                select(AssistantRow.id).where(AssistantRow.application_id == self._application_id)
             )
             rows = result.fetchall()
-            return tuple([await self.get(str(row[0])) for row in rows])
+        return tuple([await self.get(str(row[0])) for row in rows])
 
     async def versions(self, assistant_id: str) -> tuple[Assistant, ...]:
         async with self._sessions() as session:
@@ -118,7 +130,9 @@ class PostgresAssistantRepository:
             )
             rows = result.all()
             if not rows:
-                raise RuntimeFailure(ErrorCode.RESOURCE_NOT_FOUND, f"assistant not found: {assistant_id}")
+                raise RuntimeFailure(
+                    ErrorCode.RESOURCE_NOT_FOUND, f"assistant not found: {assistant_id}"
+                )
             return tuple(self._to_assistant(row, version) for row, version in rows)
 
     async def update(self, assistant_id: str, assistant: Assistant) -> Assistant:
@@ -126,30 +140,26 @@ class PostgresAssistantRepository:
             async with session.begin():
                 row = await session.get(AssistantRow, str(assistant_id))
                 if row is None or row.application_id != self._application_id:
-                    raise RuntimeFailure(ErrorCode.RESOURCE_NOT_FOUND, f"assistant not found: {assistant_id}")
+                    raise RuntimeFailure(
+                        ErrorCode.RESOURCE_NOT_FOUND, f"assistant not found: {assistant_id}"
+                    )
                 result = await session.execute(
-                    text(
-                        "SELECT COALESCE(MAX(version), 0) + 1 FROM rt_core.assistant_versions "
-                        "WHERE assistant_id = :assistant_id"
-                    ),
-                    {"assistant_id": str(assistant_id)},
+                    select(AssistantVersionRow.version)
+                    .where(AssistantVersionRow.assistant_id == str(assistant_id))
+                    .order_by(AssistantVersionRow.version.desc())
+                    .limit(1)
                 )
-                version = int(result.scalar_one())
-                await session.execute(
-                    text(
-                        "INSERT INTO rt_core.assistant_versions "
-                        "(id, assistant_id, version, config, context, metadata) "
-                        "VALUES (:id, :assistant_id, :version, CAST(:config AS jsonb), "
-                        "CAST(:context AS jsonb), CAST(:metadata AS jsonb))"
-                    ),
-                    {
-                        "id": f"{assistant_id}:{version}",
-                        "assistant_id": str(assistant_id),
-                        "version": version,
-                        "config": json.dumps(assistant.config),
-                        "context": json.dumps(assistant.context),
-                        "metadata": json.dumps({**assistant.metadata, "name": assistant.name}),
-                    },
+                current = result.scalar_one_or_none() or 0
+                version = int(current) + 1
+                session.add(
+                    AssistantVersionRow(
+                        id=f"{assistant_id}:{version}",
+                        assistant_id=str(assistant_id),
+                        version=version,
+                        config=assistant.config,
+                        context=assistant.context,
+                        metadata_json={**assistant.metadata, "name": assistant.name},
+                    )
                 )
                 row.graph_id = assistant.graph_id
                 row.active_version = version
@@ -160,8 +170,15 @@ class PostgresAssistantRepository:
             async with session.begin():
                 row = await session.get(AssistantRow, str(assistant_id))
                 version_row = await session.get(AssistantVersionRow, f"{assistant_id}:{version}")
-                if row is None or row.application_id != self._application_id or version_row is None:
-                    raise RuntimeFailure(ErrorCode.RESOURCE_NOT_FOUND, f"assistant version not found: {assistant_id}/{version}")
+                if (
+                    row is None
+                    or row.application_id != self._application_id
+                    or version_row is None
+                ):
+                    raise RuntimeFailure(
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        f"assistant version not found: {assistant_id}/{version}",
+                    )
                 row.active_version = version
         return await self.get(str(assistant_id))
 
@@ -171,7 +188,9 @@ class PostgresAssistantRepository:
             async with session.begin():
                 row = await session.get(AssistantRow, str(assistant_id))
                 if row is None or row.application_id != self._application_id:
-                    raise RuntimeFailure(ErrorCode.RESOURCE_NOT_FOUND, f"assistant not found: {assistant_id}")
+                    raise RuntimeFailure(
+                        ErrorCode.RESOURCE_NOT_FOUND, f"assistant not found: {assistant_id}"
+                    )
                 await session.execute(
                     text("DELETE FROM rt_core.assistant_versions WHERE assistant_id = :assistant_id"),
                     {"assistant_id": str(assistant_id)},
@@ -180,20 +199,25 @@ class PostgresAssistantRepository:
 
     async def count(self, *, graph_id: str | None = None) -> int:
         async with self._sessions() as session:
-            query = "SELECT COUNT(*) FROM rt_core.assistants WHERE application_id = :application_id"
-            params: dict[str, Any] = {"application_id": self._application_id}
+            query = select(AssistantRow).where(
+                AssistantRow.application_id == self._application_id
+            )
             if graph_id is not None:
-                query += " AND graph_id = :graph_id"
-                params["graph_id"] = graph_id
-            result = await session.execute(text(query), params)
-            return int(result.scalar_one())
+                query = query.where(AssistantRow.graph_id == graph_id)
+            rows = (await session.execute(query)).scalars().all()
+            return len(rows)
 
     @staticmethod
     def _to_assistant(row: AssistantRow, version: AssistantVersionRow) -> Assistant:
         metadata = dict(version.metadata_json)
         return Assistant(
-            AssistantId.parse(row.id), row.graph_id, version.version,
-            metadata.pop("name", None), version.config, version.context, metadata,
+            AssistantId.parse(row.id),
+            row.graph_id,
+            version.version,
+            metadata.pop("name", None),
+            version.config,
+            version.context,
+            metadata,
         )
 
 
@@ -214,7 +238,9 @@ class PostgresApplicationConfigRepository:
             )
             item = result.mappings().first()
             if item is None:
-                raise RuntimeFailure(ErrorCode.RESOURCE_NOT_FOUND, f"active config not found: {application_id}")
+                raise RuntimeFailure(
+                    ErrorCode.RESOURCE_NOT_FOUND, f"active config not found: {application_id}"
+                )
             return ConfigRevision(
                 application_id,
                 int(item["revision_number"]),
@@ -229,6 +255,11 @@ class PostgresApplicationConfigRepository:
         config_hash = hashlib.sha256(encoded.encode()).hexdigest()
         async with self._sessions() as session:
             async with session.begin():
+                # Serialize revision allocation per application without relying on MAX()+1 races.
+                await session.execute(
+                    text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+                    {"key": f"application-config:{application_id}"},
+                )
                 result = await session.execute(
                     text(
                         "SELECT COALESCE(MAX(revision_number), 0) + 1 "
@@ -242,8 +273,9 @@ class PostgresApplicationConfigRepository:
                     text(
                         "INSERT INTO rt_core.application_revisions "
                         "(id, application_id, revision_number, config, config_hash, active) "
-                        "VALUES (:id, :application_id, :revision_number, CAST(:config AS jsonb), :config_hash, false)"
-                    ).bindparams(),
+                        "VALUES (:id, :application_id, :revision_number, CAST(:config AS jsonb), "
+                        ":config_hash, false)"
+                    ),
                     {
                         "id": str(revision_id),
                         "application_id": application_id,
@@ -274,7 +306,9 @@ class PostgresApplicationConfigRepository:
                 )
                 item = result.mappings().first()
                 if item is None:
-                    raise RuntimeFailure(ErrorCode.RESOURCE_NOT_FOUND, "config revision not found")
+                    raise RuntimeFailure(
+                        ErrorCode.RESOURCE_NOT_FOUND, "config revision not found"
+                    )
         return ConfigRevision(
             application_id,
             revision,
@@ -286,15 +320,25 @@ class PostgresApplicationConfigRepository:
 
 
 class PostgresThreadRepository:
-    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self,
+        sessions: async_sessionmaker[AsyncSession],
+        scope: ApplicationScope | None = None,
+    ) -> None:
         self._sessions = sessions
+        self._scope = scope
 
     async def create(self, thread: Thread) -> Thread:
+        if self._scope is None:
+            raise RuntimeError("application scope is required to create a thread")
         async with self._sessions() as session:
             async with session.begin():
                 session.add(
                     ThreadRow(
                         id=str(thread.thread_id),
+                        workspace_id=str(self._scope.workspace_id),
+                        project_id=str(self._scope.project_id),
+                        application_id=str(self._scope.application_id),
                         status=thread.status.value,
                         metadata_json=thread.metadata,
                     )
@@ -304,8 +348,13 @@ class PostgresThreadRepository:
     async def get(self, thread_id: str) -> Thread:
         async with self._sessions() as session:
             row = await session.get(ThreadRow, str(thread_id))
-            if row is None:
-                raise RuntimeFailure(ErrorCode.RESOURCE_NOT_FOUND, f"thread not found: {thread_id}")
+            if row is None or (
+                self._scope is not None
+                and row.application_id != str(self._scope.application_id)
+            ):
+                raise RuntimeFailure(
+                    ErrorCode.RESOURCE_NOT_FOUND, f"thread not found: {thread_id}"
+                )
             return Thread(
                 ThreadId.parse(row.id),
                 ThreadStatus(row.status),
@@ -318,7 +367,10 @@ class PostgresThreadRepository:
         async with self._sessions() as session:
             async with session.begin():
                 row = await session.get(ThreadRow, str(thread.thread_id))
-                if row is None:
+                if row is None or (
+                    self._scope is not None
+                    and row.application_id != str(self._scope.application_id)
+                ):
                     raise RuntimeFailure(
                         ErrorCode.RESOURCE_NOT_FOUND, f"thread not found: {thread.thread_id}"
                     )
@@ -329,8 +381,13 @@ class PostgresThreadRepository:
         async with self._sessions() as session:
             async with session.begin():
                 row = await session.get(ThreadRow, str(thread_id))
-                if row is None:
-                    raise RuntimeFailure(ErrorCode.RESOURCE_NOT_FOUND, f"thread not found: {thread_id}")
+                if row is None or (
+                    self._scope is not None
+                    and row.application_id != str(self._scope.application_id)
+                ):
+                    raise RuntimeFailure(
+                        ErrorCode.RESOURCE_NOT_FOUND, f"thread not found: {thread_id}"
+                    )
                 await session.delete(row)
 
     async def count(
@@ -349,6 +406,10 @@ class PostgresThreadRepository:
     ) -> tuple[Thread, ...]:
         async with self._sessions() as session:
             query = select(ThreadRow).order_by(ThreadRow.created_at.desc()).limit(limit).offset(offset)
+            if self._scope is not None:
+                query = query.where(
+                    ThreadRow.application_id == str(self._scope.application_id)
+                )
             if status is not None:
                 query = query.where(ThreadRow.status == status)
             rows = (await session.execute(query)).scalars().all()
@@ -361,7 +422,10 @@ class PostgresThreadRepository:
                     row.updated_at,
                 )
                 for row in rows
-                if all(row.metadata_json.get(key) == value for key, value in (metadata or {}).items())
+                if all(
+                    row.metadata_json.get(key) == value
+                    for key, value in (metadata or {}).items()
+                )
             ]
             return tuple(items)
 
@@ -398,6 +462,7 @@ def _run(row: RunRow) -> Run:
         row.updated_at,
         row.result,
         error,
+        ExecutionTarget(row.graph_id, row.assistant_version),
     )
 
 
@@ -418,6 +483,8 @@ class PostgresRunRepository:
                         revision_id=str(i.scope.revision_id),
                         deployment_id=str(i.scope.deployment_id),
                         assistant_id=str(i.assistant_id),
+                        assistant_version=run.target.assistant_version,
+                        graph_id=run.target.graph_id,
                         thread_id=str(i.thread_id) if i.thread_id else None,
                         attempt_id=str(i.attempt_id),
                         status=run.status.value,
@@ -453,7 +520,9 @@ class PostgresRunRepository:
             async with session.begin():
                 row = await session.get(RunRow, str(run.run_id))
                 if row is None:
-                    raise RuntimeFailure(ErrorCode.RUN_NOT_FOUND, f"run not found: {run.run_id}")
+                    raise RuntimeFailure(
+                        ErrorCode.RUN_NOT_FOUND, f"run not found: {run.run_id}"
+                    )
                 row.status, row.result, row.error = (
                     run.status.value,
                     run.result,
