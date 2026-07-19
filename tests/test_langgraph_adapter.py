@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import TypedDict
 
 import pytest
@@ -157,6 +158,66 @@ async def test_stream_v2_tool_and_subgraph_namespace_mapping() -> None:
     assert events[0].namespace == ("supervisor", "research-agent")
     assert events[1].type is RuntimeEventType.TOOL_STARTED
     assert events[2].type is RuntimeEventType.TOOL_COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_builder_receives_managed_checkpointer_and_store() -> None:
+    captured: dict[str, object] = {}
+
+    def factory(*, checkpointer=None, store=None):
+        captured["checkpointer"] = checkpointer
+        captured["store"] = store
+        return builder().compile(checkpointer=checkpointer, store=store)
+
+    adapter = LangGraphAdapter(factory, persistence_mode="platform-managed")
+    assert captured["checkpointer"] is not None
+    assert captured["store"] is not None
+    assert adapter.manifest.capabilities.checkpoint is True
+
+
+@pytest.mark.asyncio
+async def test_compiled_graph_rejects_platform_managed_persistence() -> None:
+    compiled = builder().compile()
+    with pytest.raises(LangGraphAdapterError) as error:
+        LangGraphAdapter(compiled, persistence_mode="platform-managed")
+    assert error.value.code is LangGraphErrorCode.INVALID_PERSISTENCE
+
+
+@pytest.mark.asyncio
+async def test_application_managed_compiled_graph_preserves_persistence() -> None:
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    compiled = builder().compile(checkpointer=InMemorySaver())
+    adapter = LangGraphAdapter(compiled, persistence_mode="application-managed")
+    assert adapter.manifest.capabilities.checkpoint is True
+    assert adapter.manifest.session_affinity.value == "required"
+
+
+async def _consume(stream):
+    async for _ in stream:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_cancel_stops_registered_stream_task() -> None:
+    started = asyncio.Event()
+
+    async def blocking_node(state: State):
+        started.set()
+        await asyncio.Future()
+        return state
+
+    graph = StateGraph(State)
+    graph.add_node("blocking", blocking_node)
+    graph.add_edge(START, "blocking")
+    graph.add_edge("blocking", END)
+    adapter = LangGraphAdapter(graph)
+    run_request = ExecutionRequest(identity("cancel-run"), input={})
+    stream_task = asyncio.create_task(_consume(adapter.stream(run_request)))
+    await started.wait()
+    await adapter.cancel(run_request)
+    with pytest.raises(asyncio.CancelledError):
+        await stream_task
 
 
 @pytest.mark.asyncio

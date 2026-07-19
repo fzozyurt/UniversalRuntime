@@ -19,4 +19,6 @@ The adapter must:
 
 `tests/compatibility/test_langgraph_sdk.py` is the official SDK smoke surface. It runs when `UR_LANGGRAPH_SDK_URL` points at a running Gateway and is skipped otherwise.
 
+Detection order is explicit profile/entrypoint metadata, exported framework metadata, known package metadata, then generic LangGraph fallback. Managed persistence is injected only into builders/factories; compiled application-managed graphs retain their own providers, while compiled graphs without persistence reject platform-managed injection with a typed error.
+
 PostgreSQL saver/store wiring remains a provider boundary; the local profile uses upstream `InMemorySaver` and `InMemoryStore`, and no upstream checkpoint schema is forked.

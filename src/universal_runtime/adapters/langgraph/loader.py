@@ -59,10 +59,12 @@ def _compile(target: Any, *, checkpointer: Any | None, store: Any | None) -> Any
 def _call_factory(target: Any, *, checkpointer: Any | None, store: Any | None) -> Any:
     kwargs = {"checkpointer": checkpointer, "store": store}
     kwargs = {key: value for key, value in kwargs.items() if value is not None}
+    fallback = False
     try:
         result = target(**kwargs) if kwargs else target()
     except TypeError as exc:
         if kwargs and "unexpected keyword" in str(exc):
+            fallback = True
             result = target()
         else:
             raise
@@ -72,5 +74,10 @@ def _call_factory(target: Any, *, checkpointer: Any | None, store: Any | None) -
         raise LangGraphAdapterError(
             LangGraphErrorCode.INVALID_GRAPH,
             "factory did not return a compiled graph or graph builder",
+        )
+    if fallback:
+        raise LangGraphAdapterError(
+            LangGraphErrorCode.INVALID_PERSISTENCE,
+            "compiled factory did not accept managed persistence providers",
         )
     return result

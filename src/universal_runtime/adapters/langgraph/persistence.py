@@ -38,6 +38,11 @@ def postgres_persistence(checkpointer: Any, store: Any | None) -> PersistencePro
 
 
 def validate_persistence(mode: str, *, has_checkpointer: bool) -> None:
+    if mode not in {"disabled", "platform-managed", "application-managed"}:
+        raise LangGraphAdapterError(
+            LangGraphErrorCode.INVALID_PERSISTENCE, f"unknown persistence mode: {mode}"
+        )
+
     if mode == "platform-managed" and has_checkpointer:
         raise LangGraphAdapterError(
             LangGraphErrorCode.INVALID_PERSISTENCE,

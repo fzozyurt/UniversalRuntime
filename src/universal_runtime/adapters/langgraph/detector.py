@@ -25,14 +25,14 @@ def detect_graph(
         if is_factory
         else GraphObjectKind.BUILDER
     )
-    config = getattr(target, "config", {})
-    metadata = config.get("metadata", {}) if isinstance(config, dict) else {}
-    integration = str(metadata.get("ls_integration", ""))
+    metadata = _export_metadata(target)
     if profile is not None:
         resolved_profile = profile
-    elif integration == "deepagents" or module.startswith("deepagents"):
+    elif (exported := _profile_from_metadata(metadata)) is not None:
+        resolved_profile = exported
+    elif module.startswith("deepagents"):
         resolved_profile = LangGraphProfile.DEEPAGENTS
-    elif integration == "langchain_create_agent" or module.startswith("langchain"):
+    elif module.startswith("langchain"):
         resolved_profile = LangGraphProfile.LANGCHAIN_AGENT
     else:
         resolved_profile = LangGraphProfile.LANGGRAPH
@@ -69,6 +69,35 @@ def _schema(target: Any, name: str) -> dict[str, Any] | None:
         return dict(value)
     fields = getattr(value, "__annotations__", None)
     return {"fields": list(fields)} if fields else {"type": repr(value)}
+
+
+def _export_metadata(target: Any) -> dict[str, Any]:
+    exported = getattr(target, "__universal_runtime__", None)
+    if isinstance(exported, dict):
+        return dict(exported)
+    runtime_profile = getattr(target, "__runtime_profile__", None)
+    if runtime_profile is not None:
+        return {"profile": runtime_profile}
+    config = getattr(target, "config", {})
+    if isinstance(config, dict) and isinstance(config.get("metadata"), dict):
+        return dict(config["metadata"])
+    return {}
+
+
+def _profile_from_metadata(metadata: dict[str, Any]) -> LangGraphProfile | None:
+    value = metadata.get("profile", metadata.get("runtime_profile"))
+    if value is None:
+        integration = metadata.get("ls_integration")
+        value = {
+            "deepagents": LangGraphProfile.DEEPAGENTS,
+            "langchain_create_agent": LangGraphProfile.LANGCHAIN_AGENT,
+        }.get(str(integration))
+    if value is None:
+        return None
+    try:
+        return LangGraphProfile(str(value))
+    except ValueError:
+        return None
 
 
 def is_compiled_graph(target: Any) -> bool:

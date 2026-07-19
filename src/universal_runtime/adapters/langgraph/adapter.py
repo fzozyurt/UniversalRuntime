@@ -19,7 +19,11 @@ from universal_runtime.adapters.langgraph.persistence import (
 )
 from universal_runtime.adapters.langgraph.state_adapter import get_state, get_state_history
 from universal_runtime.adapters.langgraph.stream_mapper import map_stream
-from universal_runtime.domain.capabilities import AdapterCapabilities, AdapterManifest
+from universal_runtime.domain.capabilities import (
+    AdapterCapabilities,
+    AdapterManifest,
+    SessionAffinity,
+)
 from universal_runtime.domain.events import RuntimeEventDraft, RuntimeEventType
 from universal_runtime.domain.execution import ExecutionRequest
 
@@ -50,16 +54,23 @@ class LangGraphAdapter:
 
     def _manifest_for_graph(self, manifest: AdapterManifest) -> AdapterManifest:
         capabilities = manifest.capabilities
-        persistence_enabled = (
-            self._persistence_mode != "disabled"
-            and self._providers.checkpointer is not None
-            and self._descriptor.has_checkpointer
+        persistence_enabled = self._descriptor.has_checkpointer and (
+            self._persistence_mode != "disabled" or self._providers.provider != "disabled"
         )
         has_state = persistence_enabled and hasattr(self._graph, "aget_state")
         has_history = persistence_enabled and hasattr(self._graph, "aget_state_history")
         has_update = persistence_enabled and hasattr(self._graph, "aupdate_state")
+        affinity = manifest.session_affinity
+        if self._persistence_mode == "application-managed" and self._descriptor.has_checkpointer:
+            checkpoint_module = type(getattr(self._graph, "checkpointer", None)).__module__
+            affinity = (
+                SessionAffinity.REQUIRED
+                if "checkpoint.memory" in checkpoint_module
+                else SessionAffinity.NONE
+            )
         return replace(
             manifest,
+            session_affinity=affinity,
             capabilities=AdapterCapabilities(
                 streaming=capabilities.streaming,
                 cancellation=True,
