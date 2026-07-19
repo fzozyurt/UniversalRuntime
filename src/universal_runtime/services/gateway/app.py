@@ -313,7 +313,7 @@ def create_app(
     @app.get("/assistants/{assistant_id}/graph")
     async def assistant_graph(assistant_id: str, xray: bool = False) -> Any:
         await state.assistants.get(assistant_id)
-        adapter = _runtime_adapter(state)
+        adapter = _runtime_adapter(state, assistant_id)
         get_graph = getattr(adapter, "get_graph", None)
         if get_graph is None:
             raise RuntimeFailure(
@@ -324,7 +324,7 @@ def create_app(
     @app.get("/assistants/{assistant_id}/subgraphs")
     async def assistant_subgraphs(assistant_id: str, xray: bool = False) -> dict[str, Any]:
         await state.assistants.get(assistant_id)
-        adapter = _runtime_adapter(state)
+        adapter = _runtime_adapter(state, assistant_id)
         get_subgraphs = getattr(adapter, "get_subgraphs", None)
         if get_subgraphs is None:
             raise RuntimeFailure(
@@ -381,7 +381,7 @@ def create_app(
     @app.get("/assistants/{assistant_id}/schemas")
     async def assistant_schemas(assistant_id: str) -> dict[str, Any]:
         assistant = await state.assistants.get(assistant_id)
-        descriptor = await _runtime_adapter(state).inspect()
+        descriptor = await _runtime_adapter(state, assistant.assistant_id.__str__()).inspect()
         return {
             "graph_id": assistant.graph_id,
             "input_schema": descriptor.input_schema,
@@ -476,7 +476,7 @@ def create_app(
     @app.get("/threads/{thread_id}/state")
     async def get_thread_state(thread_id: str) -> Any:
         run = await _latest_thread_run(state, thread_id)
-        adapter = _runtime_adapter(state)
+        adapter = _runtime_adapter(state, str(run.identity.assistant_id))
         return _compat_state(await adapter.get_state(ExecutionRequest(identity=run.identity)))
 
     @app.get("/threads/{thread_id}/state/{checkpoint_id}")
@@ -487,7 +487,7 @@ def create_app(
     @app.post("/threads/{thread_id}/state")
     async def update_thread_state(thread_id: str, payload: JsonObject = Body(...)) -> Any:
         run = await _latest_thread_run(state, thread_id)
-        adapter = _runtime_adapter(state)
+        adapter = _runtime_adapter(state, str(run.identity.assistant_id))
         values = payload.get("values", payload)
         result = await adapter.update_state(ExecutionRequest(identity=run.identity), values)
         return _compat_state(result)
@@ -506,7 +506,7 @@ def create_app(
         run = await state.runs.latest_for_thread(thread_id)
         if run is None:
             return []
-        adapter = _runtime_adapter(state)
+        adapter = _runtime_adapter(state, str(run.identity.assistant_id))
         history = await adapter.get_state_history(ExecutionRequest(identity=run.identity))
         return [_compat_state(item) for item in history]
 
@@ -770,13 +770,15 @@ async def _wait_for_run(state: LocalRuntime, run_id: RunId) -> dict[str, Any]:
         await asyncio.sleep(0.05)
 
 
-def _runtime_adapter(state: LocalRuntime) -> Any:
+def _runtime_adapter(state: LocalRuntime, assistant_id: str | None = None) -> Any:
     adapters = state.adapters.all()
     if not adapters:
         raise RuntimeFailure(
             ErrorCode.CAPABILITY_NOT_SUPPORTED,
             "no runtime adapter is registered for this application",
         )
+    if assistant_id is not None:
+        return cast(Any, state.adapters.get(assistant_id))
     return cast(Any, adapters[0])
 
 
