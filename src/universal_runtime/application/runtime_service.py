@@ -18,7 +18,14 @@ from universal_runtime.domain.execution import (
     Thread,
 )
 from universal_runtime.domain.execution.requests import RunCommand
-from universal_runtime.domain.identity import CommandId, RunId, ThreadId, WorkerId
+from universal_runtime.domain.identity import (
+    ApplicationScope,
+    CommandId,
+    ExecutionIdentity,
+    RunId,
+    ThreadId,
+    WorkerId,
+)
 from universal_runtime.domain.primitives.json_types import JsonObject, JsonValue
 from universal_runtime.ports.events import EventJournal, EventReplay, EventSubscription
 from universal_runtime.ports.outbox import OutboxMessage, OutboxRepository
@@ -47,6 +54,7 @@ class RuntimeExecutionService:
         subscription: EventSubscription | None = None,
         outbox: OutboxRepository | None = None,
         assistants: AssistantRepository | None = None,
+        execution_scope: ApplicationScope | None = None,
         adapters: AdapterRegistry | None = None,
         capacity: Any | None = None,
     ) -> None:
@@ -58,6 +66,7 @@ class RuntimeExecutionService:
         self._subscription = subscription
         self._outbox = outbox
         self._assistants = assistants
+        self._execution_scope = execution_scope
         self._adapters = adapters
         self._capacity = capacity
         self._worker_task: asyncio.Task[None] | None = None
@@ -75,13 +84,31 @@ class RuntimeExecutionService:
         )
         return await self._threads.create(thread)
 
-    async def _resolve_request(self, request: ExecutionRequest) -> ExecutionRequest:
-        """Resolve assistant config and pin the executable graph before persistence.
+    def _pin_execution_scope(self, request: ExecutionRequest) -> ExecutionRequest:
+        scope = self._execution_scope
+        if scope is None or request.identity.scope == scope:
+            return request
+        identity = request.identity
+        return replace(
+            request,
+            identity=ExecutionIdentity(
+                scope,
+                identity.assistant_id,
+                identity.run_id,
+                identity.attempt_id,
+                identity.thread_id,
+            ),
+        )
 
-        The transport may omit a graph target for backwards compatibility. The
-        application service owns resolution so every ingress surface (native HTTP,
-        LangGraph compatibility, A2A and direct SDK) produces the same immutable run.
+    async def _resolve_request(self, request: ExecutionRequest) -> ExecutionRequest:
+        """Resolve authoritative scope, assistant config and executable graph.
+
+        The HTTP compatibility layer may carry placeholder scope values. The
+        application service replaces them with the immutable deployment scope before
+        a run or event is persisted. Assistant resolution is also centralized here so
+        native HTTP, LangGraph compatibility, A2A and direct SDK calls behave equally.
         """
+        request = self._pin_execution_scope(request)
         if self._assistants is None:
             return request
         assistant = await self._assistants.get(str(request.identity.assistant_id))
@@ -233,7 +260,7 @@ class RuntimeExecutionService:
             RunCommand(
                 command_id=CommandId.new(),
                 identity=run.identity,
-                request=request,
+                request=replace(request, identity=run.identity),
                 priority=request.priority,
                 available_at=now,
                 created_at=now,
