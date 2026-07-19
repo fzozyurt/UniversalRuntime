@@ -49,6 +49,10 @@ def _invocation(command: Any) -> execution_pb2.InvokeRequest:
     request = command.request
     return execution_pb2.InvokeRequest(
         identity=_identity(command.identity),
+        target=execution_pb2.ExecutionTarget(
+            graph_id=request.target.graph_id,
+            assistant_version=request.target.assistant_version,
+        ),
         input=python_to_value(request.input),
         command=python_to_value(request.command),
         config=_struct(request.config),
@@ -81,10 +85,14 @@ class Dispatcher:
             topics=topics,
             group_id=f"{os.environ.get('UR_APPLICATION_ID', 'default')}.dispatcher",
         )
-        self.channels = [
-            grpc.aio.insecure_channel(target)
+        targets = [
+            target.strip()
             for target in os.environ.get("UR_WORKER_TARGETS", "worker-1:9090,worker-2:9090").split(",")
+            if target.strip()
         ]
+        if not targets:
+            raise RuntimeError("UR_WORKER_TARGETS must contain at least one gRPC target")
+        self.channels = [grpc.aio.insecure_channel(target) for target in targets]
         self._worker_index = 0
 
     async def run(self, stop: asyncio.Event) -> None:
