@@ -32,6 +32,7 @@ from universal_runtime.domain.identity import (
     WorkspaceId,
 )
 from universal_runtime.domain.primitives.json_types import JsonObject, JsonValue
+from universal_runtime.ports.runtime_adapter import RuntimeAdapter
 from universal_runtime.services.gateway.custom_http_routes import create_custom_http_router
 from universal_runtime.transport.http.dto import (
     AssistantCreate,
@@ -51,15 +52,27 @@ SCHEMA_PATH = (
 def create_app(
     runtime: LocalRuntime | None = None,
     *,
+    runtime_adapter: RuntimeAdapter | None = None,
     custom_http_target: str | None = None,
     a2a_assistant: Assistant | None = None,
     a2a_manifest: AdapterManifest | None = None,
     a2a_public_url: str = "http://localhost:8080",
 ) -> FastAPI:
     state = runtime or create_local_runtime()
+    if runtime_adapter is not None:
+        state.adapters.register(runtime_adapter)
     schema = _load_schema()
     app = FastAPI(title="UniversalRuntime Gateway", version="0.1.0")
     app.state.runtime = state
+
+    @app.on_event("startup")
+    async def start_local_execution() -> None:
+        await state.start()
+
+    @app.on_event("shutdown")
+    async def stop_local_execution() -> None:
+        await state.shutdown()
+
     if custom_http_target is not None:
         app.include_router(create_custom_http_router(custom_http_target))
     if a2a_assistant is not None and a2a_manifest is not None:
@@ -170,6 +183,12 @@ def create_app(
 
     @app.post("/assistants")
     async def create_assistant(payload: AssistantCreate) -> dict[str, Any]:
+        if payload.assistant_id and payload.if_exists == "do_nothing":
+            try:
+                return _assistant_payload(await state.assistants.get(payload.assistant_id))
+            except RuntimeFailure as exc:
+                if exc.code is not ErrorCode.RESOURCE_NOT_FOUND:
+                    raise
         graph_id = payload.graph_id or "default"
         assistant_id = (
             AssistantId.parse(payload.assistant_id) if payload.assistant_id else AssistantId.new()
@@ -203,30 +222,37 @@ def create_app(
     @app.post("/threads")
     async def create_thread(payload: ThreadCreate | None = None) -> dict[str, Any]:
         body = payload or ThreadCreate()
+        if body.thread_id and body.if_exists == "do_nothing":
+            try:
+                return _thread_payload(await state.threads.get(body.thread_id))
+            except RuntimeFailure as exc:
+                if exc.code is not ErrorCode.RESOURCE_NOT_FOUND:
+                    raise
         thread = await state.execution.create_thread(body.thread_id, body.metadata)
         return _thread_payload(thread)
 
     @app.get("/threads/{thread_id}/state")
     async def get_thread_state(thread_id: str) -> Any:
-        await state.threads.get(thread_id)
-        raise RuntimeFailure(
-            ErrorCode.CAPABILITY_NOT_SUPPORTED, "thread state requires a registered runtime adapter"
-        )
+        run = await _latest_thread_run(state, thread_id)
+        adapter = _runtime_adapter(state)
+        return _compat_state(await adapter.get_state(ExecutionRequest(identity=run.identity)))
 
     @app.post("/threads/{thread_id}/state")
-    async def update_thread_state(thread_id: str) -> Any:
-        await state.threads.get(thread_id)
-        raise RuntimeFailure(
-            ErrorCode.CAPABILITY_NOT_SUPPORTED, "thread state requires a registered runtime adapter"
-        )
+    async def update_thread_state(thread_id: str, payload: JsonObject = Body(...)) -> Any:
+        run = await _latest_thread_run(state, thread_id)
+        adapter = _runtime_adapter(state)
+        values = payload.get("values", payload)
+        result = await adapter.update_state(ExecutionRequest(identity=run.identity), values)
+        return _compat_state(result)
 
     @app.get("/threads/{thread_id}/history")
-    async def get_thread_history(thread_id: str) -> Any:
-        await state.threads.get(thread_id)
-        raise RuntimeFailure(
-            ErrorCode.CAPABILITY_NOT_SUPPORTED,
-            "thread history requires a registered runtime adapter",
-        )
+    @app.post("/threads/{thread_id}/history")
+    async def get_thread_history(thread_id: str, payload: JsonObject | None = Body(None)) -> Any:
+        del payload
+        run = await _latest_thread_run(state, thread_id)
+        adapter = _runtime_adapter(state)
+        history = await adapter.get_state_history(ExecutionRequest(identity=run.identity))
+        return [_compat_state(item) for item in history]
 
     @app.get("/threads/{thread_id}")
     async def get_thread(thread_id: str) -> dict[str, Any]:
@@ -240,7 +266,26 @@ def create_app(
     @app.post("/threads/{thread_id}/runs/stream")
     async def stream_run(thread_id: str, request: Request, payload: RunCreate) -> StreamingResponse:
         run = await _start_run(state, payload, thread_id)
-        return _sse_response(state, run.run_id, payload.stream_mode, request=request)
+        cursor = (
+            await _event_cursor(state, run.run_id)
+            if isinstance(payload.command, dict) and "resume" in payload.command
+            else None
+        )
+        return _sse_response(
+            state, run.run_id, payload.stream_mode, request=request, after_sequence=cursor
+        )
+
+    @app.get("/threads/{thread_id}/runs/{run_id}/stream")
+    async def join_stream(
+        thread_id: str,
+        run_id: str,
+        request: Request,
+        stream_mode: str | None = None,
+    ) -> StreamingResponse:
+        run = await state.runs.get(run_id)
+        if run.thread_id is None or str(run.thread_id) != thread_id:
+            raise RuntimeFailure(ErrorCode.RESOURCE_NOT_FOUND, "run does not belong to thread")
+        return _sse_response(state, run.run_id, stream_mode or "values", request=request)
 
     @app.post("/runs/stream")
     async def stream_stateless_run(request: Request, payload: RunCreate) -> StreamingResponse:
@@ -261,8 +306,30 @@ def create_app(
     async def get_run(run_id: str) -> dict[str, Any]:
         return _run_payload(await state.runs.get(run_id))
 
+    @app.get("/threads/{thread_id}/runs/{run_id}")
+    async def get_thread_run(thread_id: str, run_id: str) -> dict[str, Any]:
+        run = await state.runs.get(run_id)
+        if run.thread_id is None or str(run.thread_id) != thread_id:
+            raise RuntimeFailure(ErrorCode.RESOURCE_NOT_FOUND, "run does not belong to thread")
+        return _run_payload(run)
+
+    @app.get("/threads/{thread_id}/runs/{run_id}/join")
+    async def join_run(thread_id: str, run_id: str) -> Any:
+        run = await state.runs.get(run_id)
+        if run.thread_id is None or str(run.thread_id) != thread_id:
+            raise RuntimeFailure(ErrorCode.RESOURCE_NOT_FOUND, "run does not belong to thread")
+        adapter = _runtime_adapter(state)
+        return _compat_state(await adapter.get_state(ExecutionRequest(identity=run.identity)))
+
     @app.post("/runs/{run_id}/cancel", status_code=204)
     async def cancel_run(run_id: str) -> None:
+        await state.execution.cancel_run(run_id)
+
+    @app.post("/threads/{thread_id}/runs/{run_id}/cancel", status_code=204)
+    async def cancel_thread_run(thread_id: str, run_id: str) -> None:
+        run = await state.runs.get(run_id)
+        if run.thread_id is None or str(run.thread_id) != thread_id:
+            raise RuntimeFailure(ErrorCode.RESOURCE_NOT_FOUND, "run does not belong to thread")
         await state.execution.cancel_run(run_id)
 
     return app
@@ -271,7 +338,17 @@ def create_app(
 async def _start_run(state: LocalRuntime, payload: RunCreate, thread_id: str | None) -> Any:
     assistant = await state.assistants.get(payload.assistant_id)
     resolved_thread = ThreadId.parse(thread_id) if thread_id is not None else None
-    identity = _identity(assistant.assistant_id, RunId.new(), resolved_thread)
+    existing = (
+        await state.runs.active_for_thread(str(resolved_thread))
+        if resolved_thread is not None
+        else None
+    )
+    is_resume = isinstance(payload.command, dict) and "resume" in payload.command
+    identity = (
+        existing.identity
+        if is_resume and existing is not None and existing.status.value == "interrupted"
+        else _identity(assistant.assistant_id, RunId.new(), resolved_thread)
+    )
     modes = (
         (payload.stream_mode,)
         if isinstance(payload.stream_mode, str)
@@ -292,7 +369,41 @@ async def _start_run(state: LocalRuntime, payload: RunCreate, thread_id: str | N
             "batch": QueuePriority.BATCH,
         }[payload.priority],
     )
-    return await state.execution.start_run(request, outbox=state.outbox)
+    local_adapter = bool(state.adapters.all())
+    if is_resume and existing is not None and existing.status.value == "interrupted":
+        return await state.execution.resume_run(request)
+    return await state.execution.start_run(request, outbox=None if local_adapter else state.outbox)
+
+
+async def _latest_thread_run(state: LocalRuntime, thread_id: str) -> Any:
+    await state.threads.get(thread_id)
+    run = await state.runs.latest_for_thread(thread_id)
+    if run is None:
+        raise RuntimeFailure(ErrorCode.RESOURCE_NOT_FOUND, "thread has no runs")
+    return run
+
+
+def _runtime_adapter(state: LocalRuntime) -> Any:
+    adapters = state.adapters.all()
+    if not adapters:
+        raise RuntimeFailure(
+            ErrorCode.CAPABILITY_NOT_SUPPORTED,
+            "no runtime adapter is registered for this application",
+        )
+    return cast(Any, adapters[0])
+
+
+def _compat_state(state: Any) -> JsonObject:
+    if hasattr(state, "values"):
+        values = cast(JsonValue, state.values)
+        return {
+            "values": values,
+            "next": list(getattr(state, "next", ())),
+            "metadata": state.metadata,
+        }
+    if isinstance(state, dict):
+        return cast(JsonObject, state)
+    return {"values": cast(JsonValue, state)}
 
 
 def _identity(
@@ -320,15 +431,17 @@ def _sse_response(
     *,
     request: Request,
     native: bool = False,
+    after_sequence: int | None = None,
 ) -> StreamingResponse:
-    selected = mode if isinstance(mode, str) else mode[0]
+    selected_modes = {mode} if isinstance(mode, str) else set(mode)
     cursor_text = request.headers.get("last-event-id")
-    try:
-        after_sequence = int(cursor_text) if cursor_text is not None else -1
-    except ValueError as exc:
-        raise RuntimeFailure(
-            ErrorCode.STREAM_CURSOR_INVALID, "Last-Event-ID must be an integer"
-        ) from exc
+    if after_sequence is None:
+        try:
+            after_sequence = int(cursor_text) if cursor_text is not None else -1
+        except ValueError as exc:
+            raise RuntimeFailure(
+                ErrorCode.STREAM_CURSOR_INVALID, "Last-Event-ID must be an integer"
+            ) from exc
     if after_sequence < -1:
         raise RuntimeFailure(ErrorCode.STREAM_CURSOR_INVALID, "Last-Event-ID must be >= 0")
 
@@ -336,9 +449,16 @@ def _sse_response(
         if not native:
             yield "event: metadata\ndata: " + json.dumps({"run_id": str(run_id)}) + "\n\n"
         async for event in state.events.subscribe(run_id, after_sequence=after_sequence):
-            event_name = str(event.type) if native else selected
-            payload = event.data if not native else _event_payload(event)
-            yield f"id: {event.sequence}\nevent: {event_name}\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
+            if native:
+                event_name = str(event.type)
+                encoded_payload: JsonValue = _event_payload(event)
+            else:
+                stream_mode = event.native.get("langgraph_mode")
+                if stream_mode not in selected_modes:
+                    continue
+                event_name = str(stream_mode)
+                encoded_payload = event.data
+            yield f"id: {event.sequence}\nevent: {event_name}\ndata: {json.dumps(encoded_payload, separators=(',', ':'))}\n\n"
         if not native:
             yield "event: end\ndata: null\n\n"
 
@@ -347,6 +467,11 @@ def _sse_response(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+async def _event_cursor(state: LocalRuntime, run_id: RunId) -> int:
+    events = await state.events.replay(run_id)
+    return max((event.sequence for event in events), default=-1)
 
 
 def _event_payload(event: Any) -> JsonObject:

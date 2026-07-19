@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 
 from universal_runtime.domain.assistants import Assistant
 from universal_runtime.domain.errors import ErrorCode, RuntimeFailure
@@ -98,6 +99,19 @@ class InMemoryRunRepository:
     async def active_for_thread(self, thread_id: str | ThreadId) -> Run | None:
         async with self._lock:
             return self._active_for_thread(str(thread_id))
+
+    async def latest_for_thread(self, thread_id: str | ThreadId) -> Run | None:
+        async with self._lock:
+            candidates = [
+                run
+                for run in self._items.values()
+                if run.thread_id is not None and str(run.thread_id) == str(thread_id)
+            ]
+            return max(
+                candidates,
+                key=lambda run: run.created_at or datetime.min.replace(tzinfo=UTC),
+                default=None,
+            )
 
     def _active_for_thread(self, thread_id: str) -> Run | None:
         active = {RunStatus.PENDING, RunStatus.RUNNING, RunStatus.INTERRUPTED}

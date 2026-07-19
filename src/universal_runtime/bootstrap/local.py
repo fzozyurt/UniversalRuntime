@@ -29,7 +29,11 @@ class LocalRuntime:
     capacity: ExecutionCapacity
     execution: RuntimeExecutionService
 
+    async def start(self) -> None:
+        await self.execution.start_worker()
+
     async def shutdown(self) -> None:
+        await self.execution.stop_worker()
         await self.commands.close()
         await self.capacity.drain()
 
@@ -43,6 +47,7 @@ def create_local_runtime(*, max_concurrency: int = 8) -> LocalRuntime:
     events = InMemoryEventJournal()
     commands = InMemoryPriorityQueue()
     capacity = ExecutionCapacity(max_concurrency)
+    adapters = InMemoryAdapterRegistry()
     return LocalRuntime(
         config=config,
         assistants=assistants,
@@ -51,7 +56,7 @@ def create_local_runtime(*, max_concurrency: int = 8) -> LocalRuntime:
         runs=runs,
         events=events,
         commands=commands,
-        adapters=InMemoryAdapterRegistry(),
+        adapters=adapters,
         capacity=capacity,
         execution=RuntimeExecutionService(
             threads=threads,
@@ -60,5 +65,7 @@ def create_local_runtime(*, max_concurrency: int = 8) -> LocalRuntime:
             journal=events,
             replay=events,
             subscription=events,
+            adapters=adapters,
+            capacity=capacity,
         ),
     )

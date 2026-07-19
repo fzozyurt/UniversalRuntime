@@ -1,18 +1,22 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from typing import Any
 
 from universal_runtime.domain.errors import ErrorCode, RuntimeFailure
 from universal_runtime.domain.events import RuntimeEvent, RuntimeEventDraft, RuntimeEventType
-from universal_runtime.domain.execution import Run, RunError, Thread
+from universal_runtime.domain.execution import Run, RunError, RunStatus, Thread
 from universal_runtime.domain.execution.requests import ExecutionRequest, RunCommand
-from universal_runtime.domain.identity import CommandId, RunId, ThreadId
-from universal_runtime.domain.primitives.json_types import JsonObject
+from universal_runtime.domain.identity import CommandId, RunId, ThreadId, WorkerId
+from universal_runtime.domain.primitives.json_types import JsonObject, JsonValue
 from universal_runtime.ports.events import EventJournal, EventReplay, EventSubscription
 from universal_runtime.ports.outbox import OutboxMessage, OutboxRepository
 from universal_runtime.ports.queue import RunCommandQueue
+from universal_runtime.ports.registry import AdapterRegistry
 from universal_runtime.ports.repositories import RunRepository, ThreadRepository
+from universal_runtime.ports.runtime_adapter import RuntimeAdapter
 
 
 def _now() -> datetime:
@@ -30,6 +34,8 @@ class RuntimeExecutionService:
         replay: EventReplay | None = None,
         subscription: EventSubscription | None = None,
         outbox: OutboxRepository | None = None,
+        adapters: AdapterRegistry | None = None,
+        capacity: Any | None = None,
     ) -> None:
         self._threads = threads
         self._runs = runs
@@ -38,6 +44,10 @@ class RuntimeExecutionService:
         self._replay = replay
         self._subscription = subscription
         self._outbox = outbox
+        self._adapters = adapters
+        self._capacity = capacity
+        self._worker_task: asyncio.Task[None] | None = None
+        self._active_adapters: dict[str, RuntimeAdapter] = {}
 
     async def create_thread(
         self, thread_id: str | None = None, metadata: JsonObject | None = None
@@ -126,6 +136,17 @@ class RuntimeExecutionService:
 
     async def cancel_run(self, run_id: str) -> Run:
         run = await self._runs.get(run_id)
+        if run.status in {
+            RunStatus.SUCCESS,
+            RunStatus.ERROR,
+            RunStatus.TIMEOUT,
+            RunStatus.CANCELLED,
+        }:
+            return run
+        adapter = self._active_adapters.get(str(run.run_id))
+        if adapter is not None:
+            request = ExecutionRequest(identity=run.identity)
+            await adapter.cancel(request)
         cancelled = run.cancel(_now())
         if cancelled is not run:
             await self._runs.update(cancelled)
@@ -140,6 +161,151 @@ class RuntimeExecutionService:
             )
         )
         return cancelled
+
+    async def resume_run(self, request: ExecutionRequest) -> Run:
+        run = await self._runs.get(str(request.identity.run_id))
+        if run.status is not RunStatus.INTERRUPTED:
+            raise RuntimeFailure(ErrorCode.INVALID_EXECUTION_INPUT, "run is not interrupted")
+        now = _now()
+        await self._commands.publish(
+            RunCommand(
+                command_id=CommandId.new(),
+                identity=run.identity,
+                request=request,
+                priority=request.priority,
+                available_at=now,
+                created_at=now,
+            )
+        )
+        await self._journal.append(
+            RuntimeEventDraft(run.identity, RuntimeEventType.RUN_QUEUED, data={"resume": True})
+        )
+        return run
+
+    async def start_worker(self) -> None:
+        if self._worker_task is not None:
+            return
+        if self._adapters is None or not self._adapters.all():
+            return
+        self._worker_task = asyncio.create_task(self._consume_commands())
+
+    async def stop_worker(self) -> None:
+        task = self._worker_task
+        self._worker_task = None
+        if task is None:
+            return
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    async def _consume_commands(self) -> None:
+        assert self._adapters is not None
+        while True:
+            try:
+                receipt = await self._commands.receive(WorkerId.parse("local-worker"))
+            except (RuntimeFailure, asyncio.CancelledError):
+                return
+            adapter = self._adapters.all()[0]
+            execution: asyncio.Task[None] | None = None
+            try:
+                if self._capacity is None:
+                    execution = asyncio.create_task(self._execute_receipt(receipt, adapter))
+                    await execution
+                else:
+                    async with self._capacity.slot():
+                        execution = asyncio.create_task(self._execute_receipt(receipt, adapter))
+                        await execution
+            except asyncio.CancelledError:
+                if execution is not None and execution.cancelled():
+                    continue
+                raise
+
+    async def _execute_receipt(self, receipt: Any, adapter: RuntimeAdapter) -> None:
+        request = receipt.command.request
+        run = await self._runs.get(str(request.identity.run_id))
+        self._active_adapters[str(run.run_id)] = adapter
+        last_result: JsonObject | JsonValue = None
+        terminal = False
+        try:
+            await self._runs.update(run.mark_running(_now()))
+            async for draft in adapter.stream(request):
+                event = await self._journal.append(draft)
+                if event.type is RuntimeEventType.STATE_VALUES:
+                    last_result = event.data
+                if event.type in {
+                    RuntimeEventType.RUN_COMPLETED,
+                    RuntimeEventType.RUN_CANCELLED,
+                    RuntimeEventType.RUN_FAILED,
+                    RuntimeEventType.RUN_TIMEOUT,
+                    RuntimeEventType.RUN_INTERRUPTED,
+                }:
+                    terminal = True
+                    current = await self._runs.get(str(run.run_id))
+                    if event.type is RuntimeEventType.RUN_COMPLETED:
+                        await self._runs.update(current.complete(last_result, _now()))
+                    elif event.type is RuntimeEventType.RUN_CANCELLED:
+                        await self._runs.update(current.cancel(_now()))
+                    elif event.type is RuntimeEventType.RUN_INTERRUPTED:
+                        await self._runs.update(
+                            Run(
+                                current.identity,
+                                RunStatus.INTERRUPTED,
+                                current.metadata,
+                                current.created_at,
+                                _now(),
+                                current.result,
+                                current.error,
+                            )
+                        )
+                    else:
+                        await self._runs.update(
+                            current.fail(
+                                RunError("FRAMEWORK_EXECUTION_FAILED", str(event.data)), _now()
+                            )
+                        )
+                    if current.thread_id is not None:
+                        thread = await self._threads.get(str(current.thread_id))
+                        await self._threads.update(
+                            thread.mark_interrupted(_now())
+                            if event.type is RuntimeEventType.RUN_INTERRUPTED
+                            else thread.mark_idle(_now())
+                        )
+            if not terminal:
+                current = await self._runs.get(str(run.run_id))
+                await self._runs.update(current.complete(last_result, _now()))
+        except asyncio.CancelledError:
+            current = await self._runs.get(str(run.run_id))
+            if current.status is not RunStatus.CANCELLED:
+                await self._journal.append(
+                    RuntimeEventDraft(request.identity, RuntimeEventType.RUN_CANCELLED)
+                )
+                await self._runs.update(current.cancel(_now()))
+            return
+        except Exception as exc:
+            current = await self._runs.get(str(run.run_id))
+            if current.status not in {
+                RunStatus.SUCCESS,
+                RunStatus.ERROR,
+                RunStatus.TIMEOUT,
+                RunStatus.CANCELLED,
+            }:
+                await self._journal.append(
+                    RuntimeEventDraft(
+                        request.identity,
+                        RuntimeEventType.RUN_FAILED,
+                        data={"error": str(exc)},
+                    )
+                )
+                await self._runs.update(
+                    current.fail(RunError("FRAMEWORK_EXECUTION_FAILED", str(exc)), _now())
+                )
+            raise
+        finally:
+            self._active_adapters.pop(str(run.run_id), None)
+            if run.thread_id is not None:
+                thread = await self._threads.get(str(run.thread_id))
+                if thread.status.value == "busy":
+                    await self._threads.update(thread.mark_idle(_now()))
+            await self._commands.acknowledge(receipt)
 
     async def stream_events(
         self, run_id: str, after_sequence: int = -1

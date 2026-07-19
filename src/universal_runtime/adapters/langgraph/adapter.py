@@ -138,17 +138,56 @@ class LangGraphAdapter:
         yield RuntimeEventDraft(
             request.identity, RuntimeEventType.RUN_STARTED, data={"run_id": key}
         )
+        interrupted = False
         try:
             try:
-                chunks = self._graph.astream(payload, **kwargs)
+                stream_payload = (
+                    resume_command(payload["resume"])
+                    if isinstance(payload, dict) and "resume" in payload
+                    else payload
+                )
+                chunks = self._graph.astream(stream_payload, **kwargs)
                 async for event in map_stream(chunks, request):
                     yield event
+                    if (
+                        event.type is RuntimeEventType.STATE_VALUES
+                        and isinstance(event.data, dict)
+                        and "__interrupt__" in event.data
+                    ):
+                        interrupted = True
+                        yield RuntimeEventDraft(
+                            request.identity,
+                            RuntimeEventType.INTERRUPT_CREATED,
+                            event.namespace,
+                            event.data,
+                            event.native,
+                        )
             except TypeError as exc:
                 if "context" not in str(exc):
                     raise
                 kwargs.pop("context", None)
-                async for event in map_stream(self._graph.astream(payload, **kwargs), request):
+                stream_payload = (
+                    resume_command(payload["resume"])
+                    if isinstance(payload, dict) and "resume" in payload
+                    else payload
+                )
+                async for event in map_stream(
+                    self._graph.astream(stream_payload, **kwargs), request
+                ):
                     yield event
+                    if (
+                        event.type is RuntimeEventType.STATE_VALUES
+                        and isinstance(event.data, dict)
+                        and "__interrupt__" in event.data
+                    ):
+                        interrupted = True
+                        yield RuntimeEventDraft(
+                            request.identity,
+                            RuntimeEventType.INTERRUPT_CREATED,
+                            event.namespace,
+                            event.data,
+                            event.native,
+                        )
         except asyncio.CancelledError:
             yield RuntimeEventDraft(
                 request.identity, RuntimeEventType.RUN_CANCELLED, data={"run_id": key}
@@ -162,9 +201,16 @@ class LangGraphAdapter:
             )
             raise
         else:
-            yield RuntimeEventDraft(
-                request.identity, RuntimeEventType.RUN_COMPLETED, data={"run_id": key}
-            )
+            if interrupted:
+                yield RuntimeEventDraft(
+                    request.identity,
+                    RuntimeEventType.RUN_INTERRUPTED,
+                    data={"run_id": key},
+                )
+            else:
+                yield RuntimeEventDraft(
+                    request.identity, RuntimeEventType.RUN_COMPLETED, data={"run_id": key}
+                )
         finally:
             self._tasks.pop(key, None)
 

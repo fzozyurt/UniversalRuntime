@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 from typing import Any, Protocol
 
 from universal_runtime.domain.capabilities import AdapterManifest
-from universal_runtime.domain.events import RuntimeEvent
+from universal_runtime.domain.events import RuntimeEventDraft
 from universal_runtime.domain.execution import ExecutionRequest
 
 
@@ -16,6 +16,6 @@ class RuntimeAdapter(Protocol):
 
     async def invoke(self, request: ExecutionRequest) -> Any: ...
 
-    def stream(self, request: ExecutionRequest) -> AsyncIterator[RuntimeEvent]: ...
+    def stream(self, request: ExecutionRequest) -> AsyncIterator[RuntimeEventDraft]: ...
 
     async def cancel(self, request: ExecutionRequest) -> None: ...

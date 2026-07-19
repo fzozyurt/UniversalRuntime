@@ -20,6 +20,7 @@ _TERMINAL = {
     RuntimeEventType.RUN_CANCELLED,
     RuntimeEventType.RUN_FAILED,
     RuntimeEventType.RUN_TIMEOUT,
+    RuntimeEventType.RUN_INTERRUPTED,
 }
 
 

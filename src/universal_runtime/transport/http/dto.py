@@ -47,6 +47,8 @@ class AssistantCreate(TransportModel):
     config: JsonObject = Field(default_factory=dict)
     context: JsonObject = Field(default_factory=dict)
     metadata: JsonObject = Field(default_factory=dict)
+    if_exists: Literal["raise", "do_nothing"] | None = None
+    description: str | None = None
 
 
 class Assistant(AssistantCreate):
@@ -58,6 +60,10 @@ class Assistant(AssistantCreate):
 class ThreadCreate(TransportModel):
     thread_id: str | None = None
     metadata: JsonObject = Field(default_factory=dict)
+    if_exists: Literal["raise", "do_nothing"] | None = None
+    supersteps: Any | None = None
+    graph_id: str | None = None
+    ttl: Any | None = None
 
 
 class Thread(TransportModel):
@@ -89,6 +95,10 @@ class RunCreate(TransportModel):
     after_seconds: int | None = None
     durability: Literal["sync", "async", "exit"] | None = None
     langsmith_tracer: JsonObject | None = None
+    feedback_keys: list[str] | None = None
+    webhook: str | None = None
+    on_disconnect: Literal["cancel", "continue"] | None = None
+    checkpoint_during: bool | None = None
 
 
 class Run(TransportModel):

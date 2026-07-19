@@ -7,6 +7,20 @@ from universal_runtime.domain.events import RuntimeEventDraft, RuntimeEventType
 from universal_runtime.domain.execution import ExecutionRequest
 
 
+def _json_safe(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if hasattr(value, "value") and hasattr(value, "id"):
+        return {"value": _json_safe(value.value), "id": str(value.id)}
+    if hasattr(value, "model_dump"):
+        return _json_safe(value.model_dump(mode="json"))
+    raise TypeError(f"unsupported LangGraph stream payload: {type(value).__name__}")
+
+
 def _event_type(mode: str, payload: Any) -> RuntimeEventType | str:
     if mode == "values":
         return RuntimeEventType.STATE_VALUES
@@ -64,6 +78,6 @@ async def map_stream(
             request.identity,
             _event_type(mode, payload),
             namespace,
-            payload,
+            _json_safe(payload),
             {"langgraph_mode": mode, "native_type": mode},
         )
