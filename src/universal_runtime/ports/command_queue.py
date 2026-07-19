@@ -1,0 +1,13 @@
+from __future__ import annotations
+
+from typing import Protocol
+
+from universal_runtime.domain.execution import RunCommand, RunCommandReceipt
+from universal_runtime.domain.identity import WorkerId
+
+
+class RunCommandQueue(Protocol):
+    async def publish(self, command: RunCommand) -> None: ...
+    async def receive(self, worker_id: WorkerId) -> RunCommandReceipt: ...
+    async def acknowledge(self, receipt: RunCommandReceipt) -> None: ...
+    async def reject(self, receipt: RunCommandReceipt, *, retryable: bool) -> None: ...

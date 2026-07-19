@@ -1,0 +1,42 @@
+from universal_runtime.domain.identity.execution_identity import ApplicationScope, ExecutionIdentity
+from universal_runtime.domain.identity.identifiers import (
+    ApplicationId,
+    AssistantId,
+    AttemptId,
+    CommandId,
+    ConfigRevisionId,
+    DeploymentId,
+    EventId,
+    LeaseId,
+    ProjectId,
+    RevisionId,
+    RunId,
+    ThreadId,
+    TypedId,
+    WorkerId,
+    WorkspaceId,
+)
+
+__all__ = [
+    "ApplicationId",
+    "ApplicationScope",
+    "AssistantId",
+    "AttemptId",
+    "CommandId",
+    "ConfigRevisionId",
+    "DeploymentId",
+    "EventId",
+    "ExecutionIdentity",
+    "LeaseId",
+    "ProjectId",
+    "RevisionId",
+    "RunId",
+    "ThreadId",
+    "TypedId",
+    "WorkerId",
+    "WorkspaceId",
+]
+
+
+def new_identifier() -> str:
+    return str(TypedId.new())

@@ -1,6 +1,7 @@
 {
   "version": "1",
   "matrix": "docs/compatibility/LANGGRAPH_COMPATIBILITY_MATRIX.md",
+  "contracted": [],
   "implemented": [
     "health",
     "server_info",

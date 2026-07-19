@@ -1,0 +1,26 @@
+from enum import StrEnum
+
+
+class RuntimeEventType(StrEnum):
+    RUN_QUEUED = "run.queued"
+    RUN_STARTED = "run.started"
+    RUN_COMPLETED = "run.completed"
+    RUN_CANCELLED = "run.cancelled"
+    RUN_FAILED = "run.failed"
+    RUN_TIMEOUT = "run.timeout"
+    RUN_INTERRUPTED = "run.interrupted"
+    MESSAGE_STARTED = "message.started"
+    MESSAGE_DELTA = "message.delta"
+    MESSAGE_COMPLETED = "message.completed"
+    AGENT_STARTED = "agent.started"
+    AGENT_COMPLETED = "agent.completed"
+    TOOL_STARTED = "tool.started"
+    TOOL_COMPLETED = "tool.completed"
+    CUSTOM = "custom"
+    STATE_VALUES = "state.values"
+    STATE_UPDATES = "state.updates"
+    CHECKPOINT_CREATED = "checkpoint.created"
+    TASK_STARTED = "task.started"
+    TASK_COMPLETED = "task.completed"
+    INTERRUPT_CREATED = "interrupt.created"
+    INTERRUPT_RESOLVED = "interrupt.resolved"

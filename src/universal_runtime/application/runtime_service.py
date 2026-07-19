@@ -8,15 +8,9 @@ from universal_runtime.domain.errors import ErrorCode, RuntimeFailure
 from universal_runtime.domain.events import RuntimeEvent
 from universal_runtime.domain.execution import ExecutionRequest
 from universal_runtime.domain.identity import (
-    ApplicationId,
     AssistantId,
-    AttemptId,
-    DeploymentId,
     ExecutionIdentity,
-    ProjectId,
-    RevisionId,
     ThreadId,
-    WorkspaceId,
     new_identifier,
 )
 from universal_runtime.domain.resources import (
@@ -42,6 +36,7 @@ class RuntimeExecutionService:
         self._runs = runs
         self._commands = commands
         self._events = events
+        self._identities: dict[str, ExecutionIdentity] = {}
 
     async def create_thread(
         self, thread_id: str | None = None, metadata: dict[str, object] | None = None
@@ -68,6 +63,7 @@ class RuntimeExecutionService:
             metadata=dict(request.metadata),
         )
         created = await self._runs.create(run)
+        self._identities[str(run.run_id)] = request.identity
         try:
             await self._commands.publish(request)
         except Exception:
@@ -90,9 +86,7 @@ class RuntimeExecutionService:
         if run.thread_id is not None:
             thread = await self._threads.get(str(run.thread_id))
             await self._threads.update(replace(thread, status="idle", updated_at=datetime.now(UTC)))
-        await self._events.publish(
-            self._event_from_run(run, "run.cancelled", 1)
-        )
+        await self._events.publish(self._event_from_run(run, "run.cancelled", 1))
         return cancelled
 
     async def stream_events(
@@ -112,19 +106,8 @@ class RuntimeExecutionService:
             data={"assistant_id": request.assistant_id},
         )
 
-    @staticmethod
-    def _event_from_run(run: RunRecord, event_type: str, sequence: int) -> RuntimeEvent:
-        identity = ExecutionIdentity(
-            workspace_id=WorkspaceId(""),
-            project_id=ProjectId(""),
-            application_id=ApplicationId(""),
-            revision_id=RevisionId(""),
-            deployment_id=DeploymentId(""),
-            assistant_id=run.assistant_id,
-            run_id=run.run_id,
-            attempt_id=AttemptId(""),
-            thread_id=run.thread_id,
-        )
+    def _event_from_run(self, run: RunRecord, event_type: str, sequence: int) -> RuntimeEvent:
+        identity = self._identities[str(run.run_id)]
         return RuntimeEvent(
             event_id=new_identifier(),
             sequence=sequence,
