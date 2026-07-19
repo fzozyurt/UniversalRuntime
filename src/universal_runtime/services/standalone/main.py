@@ -1,0 +1,113 @@
+from __future__ import annotations
+
+import asyncio
+import importlib
+import os
+import signal
+
+import uvicorn
+
+from universal_runtime.adapters.grpc import WorkerServer
+from universal_runtime.adapters.langgraph import LangGraphAdapter
+from universal_runtime.adapters.langgraph.persistence import postgres_persistence
+from universal_runtime.adapters.postgres.database import create_engine
+from universal_runtime.adapters.postgres.langgraph import managed_langgraph_persistence
+from universal_runtime.bootstrap.runtime_config import LauncherConfig
+from universal_runtime.services.dispatcher.main import Dispatcher
+from universal_runtime.services.gateway.app import create_app
+
+
+def _entrypoints() -> tuple[str, ...]:
+    raw = os.environ.get("UR_APPLICATION_ENTRYPOINTS") or os.environ.get(
+        "UR_APPLICATION_ENTRYPOINT"
+    )
+    if not raw:
+        raise RuntimeError("standalone mode requires an application graph entrypoint")
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
+
+
+async def _serve(config: LauncherConfig) -> None:
+    """Run compatibility API, dispatcher and one application worker together.
+
+    Standalone is an application-hosted topology. Unlike the shared Gateway mode,
+    it intentionally imports user code and owns the application state persistence.
+    """
+    os.environ.setdefault("UR_WORKER_TARGETS", f"127.0.0.1:{config.grpc_port}")
+    os.environ.setdefault(
+        "UR_GATEWAY_REGISTER_URL",
+        f"http://127.0.0.1:{config.port}/internal/workers/register",
+    )
+    os.environ.setdefault("UR_WORKER_ADVERTISE_TARGET", f"127.0.0.1:{config.grpc_port}")
+
+    application = create_app()
+    http_server = uvicorn.Server(
+        uvicorn.Config(
+            application,
+            host=config.host,
+            port=config.port,
+            timeout_keep_alive=75,
+            timeout_graceful_shutdown=int(config.worker_drain_timeout_seconds),
+            log_config=None,
+        )
+    )
+    http_task = asyncio.create_task(http_server.serve())
+
+    database_url = os.environ["UR_DATABASE_URL"]
+    engine = create_engine(database_url, pool_size=30, max_overflow=10)
+    persistence_context = managed_langgraph_persistence(
+        database_url,
+        migration_engine=engine,
+        application_id=os.environ.get("UR_APPLICATION_ID", "default"),
+        environment=os.environ.get("UR_KAFKA_ENVIRONMENT", "local"),
+        workspace_key=os.environ.get("UR_WORKSPACE_KEY", "default"),
+        application_key=os.environ.get("UR_APPLICATION_ID", "default"),
+    )
+    persistence = await persistence_context.__aenter__()
+    adapters = {}
+    for entrypoint in _entrypoints():
+        module_name, attribute = entrypoint.split(":", 1)
+        target = getattr(importlib.import_module(module_name), attribute)
+        adapter = LangGraphAdapter(
+            target,
+            persistence_mode="platform-managed",
+            providers=postgres_persistence(persistence.checkpointer, persistence.store),
+        )
+        adapters[adapter.descriptor.graph_id] = adapter
+
+    worker = WorkerServer.create(
+        configured_concurrency=config.worker_max_concurrency,
+        policy_ceiling=int(os.getenv("UR_WORKER_POLICY_CEILING", "64")),
+        adapter=adapters,
+    )
+    dispatcher = Dispatcher()
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    loop.add_signal_handler(signal.SIGTERM, stop.set)
+    loop.add_signal_handler(signal.SIGINT, stop.set)
+    dispatch_task: asyncio.Task[None] | None = None
+    try:
+        await worker.start_listening("127.0.0.1", config.grpc_port)
+        dispatch_task = asyncio.create_task(dispatcher.run(stop))
+        await stop.wait()
+    finally:
+        if dispatch_task is not None:
+            dispatch_task.cancel()
+            await asyncio.gather(dispatch_task, return_exceptions=True)
+        await worker.stop(config.worker_drain_timeout_seconds)
+        http_server.should_exit = True
+        await http_task
+        await dispatcher.close()
+        await persistence_context.__aexit__(None, None, None)
+        await engine.dispose()
+
+
+def main(*, run_forever: bool = True) -> int:
+    config = LauncherConfig.from_environment()
+    config.validate()
+    if run_forever:
+        asyncio.run(_serve(config))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
