@@ -1,5 +1,5 @@
-#!/usr/bin/env sh
-set -eu
+#!/usr/bin/env bash
+set -euo pipefail
 
 MODE="${UR_MODE:-worker}"
 case "$MODE" in
