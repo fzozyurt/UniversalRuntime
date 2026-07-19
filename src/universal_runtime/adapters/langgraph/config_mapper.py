@@ -13,7 +13,10 @@ def map_config(request: ExecutionRequest) -> dict[str, Any]:
     config: dict[str, Any] = deepcopy(request.config)
     configurable = dict(config.get("configurable", {}))
     metadata = dict(config.get("metadata", {}))
-    thread_id = str(identity.thread_id) if identity.thread_id is not None else None
+    # LangGraph's Postgres saver requires a checkpoint thread key even for the
+    # SDK's stateless /runs and /runs/batch calls. Keep the public runtime
+    # identity stateless, but isolate its checkpoint lineage by run_id.
+    thread_id = str(identity.thread_id) if identity.thread_id is not None else str(identity.run_id)
     protected_config = {
         "thread_id": thread_id,
         "checkpoint_ns": request.checkpoint_namespace,

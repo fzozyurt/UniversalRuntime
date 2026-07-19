@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
 from sqlalchemy import func, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from universal_runtime.adapters.postgres.models import RuntimeEventRow
@@ -30,54 +33,68 @@ class PostgresEventJournal(EventJournal, EventReplay):
 
     async def append(self, draft: RuntimeEventDraft) -> RuntimeEvent:
         identity = draft.identity
-        async with self._sessions() as session:
-            async with session.begin():
-                await session.execute(
-                    text("SELECT pg_advisory_xact_lock(hashtextextended(:run_id, 0))"),
-                    {"run_id": str(identity.run_id)},
-                )
-                result = await session.execute(
-                    select(func.max(RuntimeEventRow.sequence))
-                    .where(RuntimeEventRow.run_id == str(identity.run_id))
-                    .with_for_update()
-                )
-                next_sequence = int(result.scalar_one_or_none() or -1) + 1
-                event = RuntimeEvent(
-                    EventId.new(),
-                    next_sequence,
-                    datetime.now(UTC),
-                    identity,
-                    draft.type,
-                    draft.namespace,
-                    draft.data,
-                    draft.native,
-                    TraceContext(),
-                )
-                row = RuntimeEventRow(
-                    id=str(event.event_id),
-                    run_id=str(identity.run_id),
-                    event_id=str(event.event_id),
-                    sequence=event.sequence,
-                    event_type=str(event.type),
-                    timestamp=event.timestamp,
-                    identity_json={
-                        "workspace_id": str(identity.scope.workspace_id),
-                        "project_id": str(identity.scope.project_id),
-                        "application_id": str(identity.scope.application_id),
-                        "revision_id": str(identity.scope.revision_id),
-                        "deployment_id": str(identity.scope.deployment_id),
-                        "assistant_id": str(identity.assistant_id),
-                        "thread_id": str(identity.thread_id) if identity.thread_id else None,
-                        "run_id": str(identity.run_id),
-                        "attempt_id": str(identity.attempt_id),
-                    },
-                    namespace=list(event.namespace),
-                    data=event.data,
-                    trace={"trace_id": event.trace.trace_id, "span_id": event.trace.span_id},
-                    native=event.native,
-                )
-                session.add(row)
-            return event
+        for attempt in range(3):
+            try:
+                async with self._sessions() as session:
+                    async with session.begin():
+                        await session.execute(
+                            text("SELECT pg_advisory_xact_lock(hashtextextended(:run_id, 0))"),
+                            {"run_id": str(identity.run_id)},
+                        )
+                        result = await session.execute(
+                            select(func.max(RuntimeEventRow.sequence)).where(
+                                RuntimeEventRow.run_id == str(identity.run_id)
+                            )
+                        )
+                        max_sequence = result.scalar_one_or_none()
+                        next_sequence = (int(max_sequence) if max_sequence is not None else -1) + 1
+                        event = RuntimeEvent(
+                            EventId.new(),
+                            next_sequence,
+                            datetime.now(UTC),
+                            identity,
+                            draft.type,
+                            draft.namespace,
+                            draft.data,
+                            draft.native,
+                            TraceContext(),
+                        )
+                        session.add(
+                            RuntimeEventRow(
+                                id=str(event.event_id),
+                                run_id=str(identity.run_id),
+                                event_id=str(event.event_id),
+                                sequence=event.sequence,
+                                event_type=str(event.type),
+                                timestamp=event.timestamp,
+                                identity_json={
+                                    "workspace_id": str(identity.scope.workspace_id),
+                                    "project_id": str(identity.scope.project_id),
+                                    "application_id": str(identity.scope.application_id),
+                                    "revision_id": str(identity.scope.revision_id),
+                                    "deployment_id": str(identity.scope.deployment_id),
+                                    "assistant_id": str(identity.assistant_id),
+                                    "thread_id": str(identity.thread_id)
+                                    if identity.thread_id
+                                    else None,
+                                    "run_id": str(identity.run_id),
+                                    "attempt_id": str(identity.attempt_id),
+                                },
+                                namespace=list(event.namespace),
+                                data=event.data,
+                                trace={
+                                    "trace_id": event.trace.trace_id,
+                                    "span_id": event.trace.span_id,
+                                },
+                                native=event.native,
+                            )
+                        )
+                    return event
+            except IntegrityError:
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(0.01 * (attempt + 1))
+        raise RuntimeError("event append retry exhausted")
 
     async def replay(self, run_id: RunId, *, after_sequence: int = -1) -> tuple[RuntimeEvent, ...]:
         async with self._sessions() as session:
@@ -89,6 +106,27 @@ class PostgresEventJournal(EventJournal, EventReplay):
                 .order_by(RuntimeEventRow.sequence)
             )
             return tuple(_to_event(row) for row in result.scalars())
+
+    async def subscribe(
+        self, run_id: RunId, *, after_sequence: int = -1
+    ) -> AsyncIterator[RuntimeEvent]:
+        cursor = after_sequence
+        while True:
+            events = await self.replay(run_id, after_sequence=cursor)
+            if events:
+                for event in events:
+                    cursor = event.sequence
+                    yield event
+                if events[-1].type in {
+                    "run.completed",
+                    "run.cancelled",
+                    "run.failed",
+                    "run.timeout",
+                    "run.interrupted",
+                }:
+                    return
+            else:
+                await asyncio.sleep(0.05)
 
 
 def _to_event(row: RuntimeEventRow) -> RuntimeEvent:

@@ -28,13 +28,17 @@ class LocalRuntime:
     adapters: InMemoryAdapterRegistry
     capacity: ExecutionCapacity
     execution: RuntimeExecutionService
+    execute_locally: bool = True
 
     async def start(self) -> None:
-        await self.execution.start_worker()
+        if self.execute_locally:
+            await self.execution.start_worker()
 
     async def shutdown(self) -> None:
         await self.execution.stop_worker()
-        await self.commands.close()
+        close = getattr(self.commands, "close", None)
+        if close is not None:
+            await close()
         await self.capacity.drain()
 
 

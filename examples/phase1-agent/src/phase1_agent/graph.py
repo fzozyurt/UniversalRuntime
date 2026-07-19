@@ -10,12 +10,15 @@ from phase1_agent.tools import deterministic_weather
 
 
 def agent_node(state: AgentState) -> dict[str, Any]:
-    """Mock LLM decision: emit one stable tool call, with no external API."""
-    del state
+    """Mock LLM decision: echo the user's text and emit one stable tool call."""
+    messages = state.get("messages", [])
+    user_text = ""
+    if messages:
+        user_text = str(getattr(messages[-1], "content", "") or "")
     return {
         "messages": [
             AIMessage(
-                content="",
+                content=f"Mock cevap: {user_text}",
                 tool_calls=[
                     {"name": "deterministic_weather", "args": {"city": "Istanbul"}, "id": "call-1"}
                 ],
@@ -33,14 +36,14 @@ def tool_node(state: AgentState) -> dict[str, Any]:
     }
 
 
-def build_graph() -> Any:
+def build_graph(*, checkpointer: Any | None = None, store: Any | None = None) -> Any:
     builder = StateGraph(AgentState, context_schema=dict[str, str])
     builder.add_node("agent", agent_node)
     builder.add_node("tool", tool_node)
     builder.add_edge(START, "agent")
     builder.add_edge("agent", "tool")
     builder.add_edge("tool", END)
-    compiled = builder.compile()
+    compiled = builder.compile(checkpointer=checkpointer, store=store)
     compiled.__universal_runtime__ = {"profile": "langgraph"}
     return compiled
 

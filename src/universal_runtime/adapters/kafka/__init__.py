@@ -1,3 +1,4 @@
+from universal_runtime.adapters.kafka.aiokafka_queue import AioKafkaRunCommandQueue
 from universal_runtime.adapters.kafka.dispatcher import (
     InMemoryKafkaTransport,
     KafkaMessage,
@@ -8,6 +9,7 @@ from universal_runtime.adapters.kafka.dispatcher import (
 from universal_runtime.adapters.kafka.topics import TopicNames
 
 __all__ = [
+    "AioKafkaRunCommandQueue",
     "InMemoryKafkaTransport",
     "KafkaMessage",
     "KafkaRunCommandQueue",

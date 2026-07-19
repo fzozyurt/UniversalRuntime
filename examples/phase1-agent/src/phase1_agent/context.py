@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Annotated, TypedDict
+
+from langchain_core.messages import AnyMessage
+from langgraph.graph.message import add_messages
 
 
 class AgentState(TypedDict, total=False):
-    messages: list[object]
+    messages: Annotated[list[AnyMessage], add_messages]
     tool_result: str
 
 

@@ -39,7 +39,7 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 >/dev/null 2>&1"]
       interval: 5s
-      timeout: 5s
+      timeout: 15s
       retries: 20
 
   kafka-init:
@@ -69,7 +69,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    command: ["migrate", "--config", "/opt/universal-runtime/runtime.yaml", "--application-id", "platform", "--environment", "local"]
+    command: ["--config", "/opt/universal-runtime/runtime.yaml", "--application-id", "platform", "--environment", "local"]
     restart: "no"
 
   gateway-1: &gateway
@@ -90,6 +90,10 @@ services:
       UR_TOPIC_PREFIX: ${UR_TOPIC_PREFIX:-rt}
       UR_KAFKA_ENVIRONMENT: ${UR_KAFKA_ENVIRONMENT:-local}
       UR_CONTRACT_SCHEMA_PATH: /opt/universal-runtime/contracts/config/runtime-application.schema.json
+      UR_APPLICATION_ID: phase1_agent
+      UR_APPLICATION_ENTRYPOINTS: phase1_agent.graph:build_graph,phase1_agent.deep_agent:build_deep_agent
+      UR_APPLICATION_NAME: phase1-agent
+      PYTHONPATH: /opt/universal-runtime:/opt/universal-runtime/applications/phase1-agent
     depends_on:
       postgres:
         condition: service_healthy
@@ -107,6 +111,19 @@ services:
       <<: *runtime-env
       UR_INSTANCE_ID: gateway-2
 
+  all: &all
+    <<: *gateway
+    profiles: ["compact"]
+    ports:
+      - "${UR_PUBLIC_PORT:-8080}:8080"
+    environment:
+      <<: *runtime-env
+      UR_MODE: all
+      UR_INSTANCE_ID: all-1
+      UR_WORKER_TARGETS: 127.0.0.1:9090
+      UR_GATEWAY_REGISTER_URL: http://127.0.0.1:8080/internal/workers/register
+      UR_WORKER_ADVERTISE_TARGET: 127.0.0.1:9090
+
   dispatcher-1: &dispatcher
     image: universal-runtime:local
     pull_policy: never
@@ -114,6 +131,7 @@ services:
       <<: *runtime-env
       UR_MODE: dispatcher
       UR_INSTANCE_ID: dispatcher-1
+      UR_WORKER_TARGETS: worker-1:9090,worker-2:9090
     depends_on:
       postgres:
         condition: service_healthy
@@ -126,6 +144,7 @@ services:
       <<: *runtime-env
       UR_MODE: dispatcher
       UR_INSTANCE_ID: dispatcher-2
+      UR_WORKER_TARGETS: worker-1:9090,worker-2:9090
 
   worker-1: &worker
     image: universal-runtime:local
@@ -137,6 +156,8 @@ services:
       UR_GRPC_HOST: 0.0.0.0
       UR_GRPC_PORT: 9090
       UR_WORKER_MAX_CONCURRENCY: ${UR_WORKER_MAX_CONCURRENCY:-8}
+      UR_GATEWAY_REGISTER_URL: http://gateway-1:8080/internal/workers/register
+      UR_WORKER_ADVERTISE_TARGET: worker-1:9090
     depends_on:
       postgres:
         condition: service_healthy
@@ -149,6 +170,7 @@ services:
       <<: *runtime-env
       UR_MODE: worker
       UR_INSTANCE_ID: worker-2
+      UR_WORKER_ADVERTISE_TARGET: worker-2:9090
 
   projector:
     image: universal-runtime:local

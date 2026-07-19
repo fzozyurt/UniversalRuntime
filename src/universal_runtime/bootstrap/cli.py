@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
@@ -67,7 +68,9 @@ def _validate_config(path: Path) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     effective_argv = list(argv) if argv is not None else None
     if not effective_argv and os.environ.get("UR_MODE"):
-        effective_argv = [os.environ["UR_MODE"]]
+        mode = os.environ["UR_MODE"]
+        command_argv = sys.argv[1:]
+        effective_argv = command_argv if command_argv[:1] == [mode] else [mode, *command_argv]
     args = _parser().parse_args(effective_argv)
     if args.command == "validate-config":
         return _validate_config(args.path)
@@ -121,9 +124,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             port=args.port,
         )
         return 0
-    if args.command in {"gateway", "dispatcher", "projector", "worker"}:
+    if args.command in {"all", "gateway", "dispatcher", "projector", "worker"}:
         service_main: Any
-        if args.command == "gateway":
+        if args.command == "all":
+            from universal_runtime.services.all.main import main as service_main
+        elif args.command == "gateway":
             from universal_runtime.services.gateway.main import main as service_main
         elif args.command == "dispatcher":
             from universal_runtime.services.dispatcher.main import main as service_main
@@ -133,6 +138,28 @@ def main(argv: Sequence[str] | None = None) -> int:
             from universal_runtime.services.worker.main import main as service_main
         return cast(int, service_main(run_forever=True))
     if args.command == "migrate":
+        import asyncio
+
+        from universal_runtime.adapters.postgres.database import create_engine
+        from universal_runtime.adapters.postgres.migration import migrate_platform
+
+        database_url = os.environ.get("UR_DATABASE_URL")
+        if not database_url:
+            print("UR_DATABASE_URL is required for migrations")
+            return 2
+
+        async def run_migration() -> None:
+            engine = create_engine(database_url)
+            try:
+                await migrate_platform(
+                    engine,
+                    application_id=args.application_id,
+                    environment=args.environment,
+                )
+            finally:
+                await engine.dispose()
+
+        asyncio.run(run_migration())
         print(
             json.dumps(
                 {

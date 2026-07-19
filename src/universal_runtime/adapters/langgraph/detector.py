@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from universal_runtime.adapters.langgraph.descriptor import (
@@ -7,6 +8,8 @@ from universal_runtime.adapters.langgraph.descriptor import (
     LangGraphDescriptor,
     LangGraphProfile,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def detect_graph(
@@ -59,6 +62,30 @@ def detect_graph(
 
 
 def _schema(target: Any, name: str) -> dict[str, Any] | None:
+    method_name = {
+        "input_schema": "get_input_jsonschema",
+        "output_schema": "get_output_jsonschema",
+        "config_schema": "get_config_jsonschema",
+        "context_schema": "get_context_jsonschema",
+    }.get(name)
+    if method_name is not None:
+        try:
+            method = getattr(target, method_name, None)
+            if callable(method):
+                value = method()
+                if isinstance(value, dict):
+                    return dict(value)
+        except Exception as exc:
+            _LOGGER.debug("could not read LangGraph schema %s", method_name, exc_info=exc)
+    if name == "state_schema":
+        try:
+            method = getattr(target, "get_input_jsonschema", None)
+            if callable(method):
+                value = method()
+                if isinstance(value, dict):
+                    return dict(value)
+        except Exception as exc:
+            _LOGGER.debug("could not read LangGraph state schema", exc_info=exc)
     try:
         value = getattr(target, name, None)
     except Exception:

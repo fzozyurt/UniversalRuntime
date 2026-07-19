@@ -15,6 +15,21 @@ from universal_runtime.adapters.grpc.generated.runtime.v1 import (
     worker_pb2,
     worker_pb2_grpc,
 )
+from universal_runtime.domain.execution import ExecutionRequest
+from universal_runtime.domain.identity import (
+    ApplicationId,
+    ApplicationScope,
+    AssistantId,
+    AttemptId,
+    DeploymentId,
+    ExecutionIdentity,
+    ProjectId,
+    RevisionId,
+    RunId,
+    ThreadId,
+    WorkspaceId,
+)
+from universal_runtime.ports.runtime_adapter import RuntimeAdapter
 
 from .payloads import python_to_value, value_to_python
 
@@ -165,8 +180,18 @@ class WorkerControlServicer(worker_pb2_grpc.WorkerControlServiceServicer):
 
 
 class ExecutionServicer(execution_pb2_grpc.ExecutionServiceServicer):
-    def __init__(self, worker: BoundedWorker) -> None:
-        self.worker = worker
+    def __init__(self, worker: BoundedWorker, adapter: RuntimeAdapter | dict[str, RuntimeAdapter] | None = None) -> None:
+        self.worker, self.adapter = worker, adapter
+
+    def _adapter_for(self, assistant_id: str) -> RuntimeAdapter:
+        if isinstance(self.adapter, dict):
+            try:
+                return self.adapter[assistant_id]
+            except KeyError as exc:
+                raise RuntimeError(f"no adapter registered for assistant: {assistant_id}") from exc
+        if self.adapter is None:
+            raise RuntimeError("worker graph adapter is not configured")
+        return self.adapter
 
     async def Invoke(
         self, request: execution_pb2.InvokeRequest, context: object
@@ -175,10 +200,12 @@ class ExecutionServicer(execution_pb2_grpc.ExecutionServiceServicer):
         await self.worker.acquire()
         self.worker.register_running(request.identity.run_id)
         try:
+            adapter = self._adapter_for(request.identity.assistant_id)
+            output = await adapter.invoke(_request_from_proto(request))
             return execution_pb2.InvokeResponse(
                 run_id=request.identity.run_id,
                 status="accepted",
-                output=python_to_value(value_to_python(request.input)),
+                output=python_to_value(output),
             )
         finally:
             self.worker.unregister_running(request.identity.run_id)
@@ -191,10 +218,18 @@ class ExecutionServicer(execution_pb2_grpc.ExecutionServiceServicer):
         await self.worker.acquire()
         self.worker.register_running(request.invocation.identity.run_id)
         try:
-            event = execution_pb2.RuntimeEvent(type="run.started", sequence=0)
-            event.identity.CopyFrom(request.invocation.identity)
-            event.timestamp.FromDatetime(datetime.now(UTC))
-            yield event
+            adapter = self._adapter_for(request.invocation.identity.assistant_id)
+            invocation = _request_from_proto(request.invocation)
+            sequence = 0
+            async for draft in adapter.stream(invocation):
+                event = execution_pb2.RuntimeEvent(
+                    type=str(draft.type), sequence=sequence, namespace=list(draft.namespace)
+                )
+                event.identity.CopyFrom(request.invocation.identity)
+                event.timestamp.FromDatetime(datetime.now(UTC))
+                event.data.CopyFrom(python_to_value(draft.data))
+                yield event
+                sequence += 1
         finally:
             self.worker.unregister_running(request.invocation.identity.run_id)
             self.worker.release()
@@ -205,3 +240,30 @@ class ExecutionServicer(execution_pb2_grpc.ExecutionServiceServicer):
         del context
         await self.worker.cancel(request.identity.run_id)
         return empty_pb2.Empty()
+
+
+def _request_from_proto(request: execution_pb2.InvokeRequest) -> ExecutionRequest:
+    raw = request.identity
+    identity = ExecutionIdentity(
+        ApplicationScope(
+            WorkspaceId.parse(raw.workspace_id),
+            ProjectId.parse(raw.project_id),
+            ApplicationId.parse(raw.application_id),
+            RevisionId.parse(raw.revision_id),
+            DeploymentId.parse(raw.deployment_id),
+        ),
+        AssistantId.parse(raw.assistant_id),
+        RunId.parse(raw.run_id),
+        AttemptId.parse(raw.attempt_id),
+        ThreadId.parse(raw.thread_id) if raw.thread_id else None,
+    )
+    return ExecutionRequest(
+        identity=identity,
+        input=value_to_python(request.input),
+        command=value_to_python(request.command),
+        config={key: value_to_python(value) for key, value in request.config.fields.items()},
+        context={key: value_to_python(value) for key, value in request.context.fields.items()},
+        metadata={key: value_to_python(value) for key, value in request.metadata.fields.items()},
+        stream_modes=tuple(request.stream_modes or ("values",)),
+        stream_subgraphs=request.stream_subgraphs,
+    )

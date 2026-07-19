@@ -97,6 +97,17 @@ class LangGraphAdapter:
     async def inspect(self, target: Any | None = None) -> LangGraphDescriptor:
         return detect_graph(self._graph if target is None else target)
 
+    async def get_graph(self, *, xray: bool = False) -> dict[str, Any]:
+        graph = self._graph.get_graph(xray=xray)
+        return graph.to_json()
+
+    async def get_subgraphs(self, *, xray: bool = False) -> dict[str, Any]:
+        del xray
+        result: dict[str, Any] = {}
+        async for namespace, subgraph in self._graph.aget_subgraphs(recurse=True):
+            result[namespace] = subgraph.get_graph().to_json()
+        return result
+
     async def invoke(self, request: ExecutionRequest) -> Any:
         task = asyncio.current_task()
         key = str(request.identity.run_id)

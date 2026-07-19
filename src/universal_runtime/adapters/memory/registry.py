@@ -9,7 +9,8 @@ class InMemoryAdapterRegistry:
         self._adapters: dict[str, RuntimeAdapter] = {}
 
     def register(self, adapter: RuntimeAdapter) -> None:
-        adapter_id = adapter.manifest.adapter_id
+        descriptor = getattr(adapter, "descriptor", None)
+        adapter_id = str(getattr(descriptor, "graph_id", adapter.manifest.adapter_id))
         if adapter_id in self._adapters:
             raise RuntimeFailure(
                 ErrorCode.INVALID_EXECUTION_INPUT, f"adapter already registered: {adapter_id}"

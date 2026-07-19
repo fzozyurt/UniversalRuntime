@@ -45,6 +45,7 @@ class LauncherConfig:
 
     def validate(self) -> None:
         if self.mode not in {
+            "all",
             "worker",
             "api",
             "gateway",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
@@ -21,6 +22,9 @@ from universal_runtime.ports.runtime_adapter import RuntimeAdapter
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class RuntimeExecutionService:
@@ -80,6 +84,13 @@ class RuntimeExecutionService:
         created = await self._runs.create(run)
         try:
             selected_outbox = outbox or self._outbox
+            await self._journal.append(
+                RuntimeEventDraft(
+                    request.identity,
+                    RuntimeEventType.RUN_QUEUED,
+                    data={"assistant_id": str(request.identity.assistant_id)},
+                )
+            )
             if selected_outbox is not None:
                 await selected_outbox.append(
                     OutboxMessage(
@@ -115,13 +126,6 @@ class RuntimeExecutionService:
                         created_at=now,
                     )
                 )
-            await self._journal.append(
-                RuntimeEventDraft(
-                    request.identity,
-                    RuntimeEventType.RUN_QUEUED,
-                    data={"assistant_id": str(request.identity.assistant_id)},
-                )
-            )
         except Exception:
             await self._runs.update(
                 created.fail(
@@ -204,7 +208,8 @@ class RuntimeExecutionService:
                 receipt = await self._commands.receive(WorkerId.parse("local-worker"))
             except (RuntimeFailure, asyncio.CancelledError):
                 return
-            adapter = self._adapters.all()[0]
+            adapter = self._adapters.get(str(receipt.identity.assistant_id))
+            _LOGGER.info("runtime command received run_id=%s", receipt.identity.run_id)
             execution: asyncio.Task[None] | None = None
             try:
                 if self._capacity is None:
@@ -218,16 +223,25 @@ class RuntimeExecutionService:
                 if execution is not None and execution.cancelled():
                     continue
                 raise
+            except Exception:
+                _LOGGER.exception("runtime command execution failed run_id=%s", receipt.identity.run_id)
+                raise
 
     async def _execute_receipt(self, receipt: Any, adapter: RuntimeAdapter) -> None:
         request = receipt.command.request
         run = await self._runs.get(str(request.identity.run_id))
+        if run.status is not RunStatus.PENDING:
+            _LOGGER.info("duplicate command ignored run_id=%s status=%s", run.run_id, run.status)
+            await self._commands.acknowledge(receipt)
+            return
         self._active_adapters[str(run.run_id)] = adapter
         last_result: JsonObject | JsonValue = None
         terminal = False
         try:
+            _LOGGER.info("runtime execution started run_id=%s", run.run_id)
             await self._runs.update(run.mark_running(_now()))
             async for draft in adapter.stream(request):
+                _LOGGER.info("runtime event received run_id=%s type=%s", run.run_id, draft.type)
                 event = await self._journal.append(draft)
                 if event.type is RuntimeEventType.STATE_VALUES:
                     last_result = event.data
@@ -281,6 +295,7 @@ class RuntimeExecutionService:
                 await self._runs.update(current.cancel(_now()))
             return
         except Exception as exc:
+            _LOGGER.exception("runtime execution crashed run_id=%s", run.run_id)
             current = await self._runs.get(str(run.run_id))
             if current.status not in {
                 RunStatus.SUCCESS,

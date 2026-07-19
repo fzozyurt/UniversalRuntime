@@ -15,6 +15,7 @@ ARG REVISION=unknown
 ARG SOURCE=https://example.invalid/universal-runtime
 ARG CREATED=unknown
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1 \
+    PYTHONPATH=/opt/universal-runtime \
     UR_CONTRACT_SCHEMA_PATH=/opt/universal-runtime/contracts/config/runtime-application.schema.json
 WORKDIR /opt/universal-runtime
 RUN addgroup --system --gid 65532 runtime \
@@ -23,9 +24,13 @@ RUN addgroup --system --gid 65532 runtime \
     && chown -R 65532:65532 /opt/universal-runtime /tmp/runtime
 COPY --from=build /dist/*.whl /tmp/
 RUN python -m pip install --no-cache-dir /tmp/*.whl \
+    && python -m pip install --no-cache-dir 'universal-runtime[langgraph,fastapi,kafka]' \
     && rm -f /tmp/*.whl
 COPY runtime.example.yaml /opt/universal-runtime/runtime.yaml
 COPY contracts /opt/universal-runtime/contracts
+COPY services /opt/universal-runtime/services
+COPY migrations /opt/universal-runtime/migrations
+COPY examples/phase1-agent/src /opt/universal-runtime/applications/phase1-agent
 COPY deployment/docker/entrypoint.sh /usr/local/bin/runtime-entrypoint
 COPY container/healthcheck.py /usr/local/bin/runtime-healthcheck.py
 RUN chmod 0555 /usr/local/bin/runtime-entrypoint /usr/local/bin/runtime-healthcheck.py
