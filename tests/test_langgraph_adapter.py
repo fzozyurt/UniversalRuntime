@@ -240,6 +240,24 @@ def test_langchain_and_deepagents_profiles_are_detected() -> None:
     assert detect_graph(deep_graph).profile is LangGraphProfile.DEEPAGENTS
 
 
+def test_postgres_provider_url_uses_raw_psycopg_conninfo_and_scoped_search_path() -> None:
+    from universal_runtime.adapters.postgres.langgraph import database_url_for_search_path
+
+    url = database_url_for_search_path(
+        "postgresql+psycopg://user:password@localhost/runtime", "rt_s_workspace_application_local"
+    )
+    assert url.startswith("postgresql://")
+    assert "rt_s_workspace_application_local" in url
+    assert "%20search_path" in url
+
+
+def test_postgres_provider_url_rejects_unsafe_schema() -> None:
+    with pytest.raises(ValueError, match="lowercase SQL identifier"):
+        from universal_runtime.adapters.postgres.langgraph import database_url_for_search_path
+
+        database_url_for_search_path("postgresql://localhost/runtime", "rt_s_bad-schema")
+
+
 def explicit_factory(*, checkpointer=None, store=None):
     del checkpointer, store
     return builder()
@@ -290,3 +308,41 @@ async def test_langchain_agent_output_runs_through_same_adapter() -> None:
     )
     assert result["messages"]
     assert adapter.descriptor.profile is LangGraphProfile.LANGCHAIN_AGENT
+
+
+@pytest.mark.asyncio
+async def test_postgres_composition_connects_detected_target_to_managed_providers() -> None:
+    from contextlib import asynccontextmanager
+    from unittest.mock import patch
+
+    from universal_runtime.adapters.langgraph.persistence import PersistenceProvider
+    from universal_runtime.adapters.langgraph.postgres_composition import (
+        detect_and_create_postgres_adapter,
+    )
+
+    @asynccontextmanager
+    async def fake_persistence(*args: object, **kwargs: object):
+        del args, kwargs
+        yield type("Persistence", (), {"checkpointer": object(), "store": object()})()
+
+    with (
+        patch(
+            "universal_runtime.adapters.langgraph.postgres_composition.managed_langgraph_persistence",
+            fake_persistence,
+        ),
+        patch(
+            "universal_runtime.adapters.langgraph.postgres_composition.LangGraphAdapter"
+        ) as adapter_type,
+    ):
+        async with detect_and_create_postgres_adapter(
+            builder,
+            database_url="postgresql://localhost/runtime",
+            migration_engine=object(),
+            application_id="application",
+            workspace_key="workspace",
+            application_key="application",
+            environment="local",
+        ) as adapter:
+            assert adapter is adapter_type.return_value
+            providers = adapter_type.call_args.kwargs["providers"]
+            assert providers.provider is PersistenceProvider.POSTGRES

@@ -46,6 +46,17 @@ def test_fixed_search_path_accepts_only_identifiers() -> None:
     assert not _is_safe_search_path("rt_a_workspace, public")
 
 
+def test_langgraph_database_url_is_pinned_to_framework_schema() -> None:
+    from universal_runtime.adapters.postgres.langgraph import database_url_for_search_path
+
+    url = database_url_for_search_path(
+        "postgresql+psycopg://runtime:secret@localhost/runtime", "rt_s_workspace_app_local"
+    )
+    assert "search_path" in url
+    assert "rt_s_workspace_app_local" in url
+    assert "public" in url
+
+
 def test_platform_metadata_contains_contract_tables() -> None:
     tables = PlatformBase.metadata.tables
     assert "rt_core.applications" in tables
@@ -54,6 +65,19 @@ def test_platform_metadata_contains_contract_tables() -> None:
     assert "rt_exec.inbox_events" in tables
     assert "rt_exec.runtime_event_batches" in tables
     assert "rt_exec.worker_leases" in tables
+
+
+@pytest.mark.asyncio
+async def test_framework_state_engine_is_application_scoped() -> None:
+    from universal_runtime.adapters.postgres.database import create_framework_state_engine
+
+    engine = create_framework_state_engine(
+        "postgresql+psycopg://runtime:runtime@localhost/runtime",
+        workspace_key="workspace",
+        application_key="application",
+        environment="local",
+    )
+    await engine.dispose()
 
 
 POSTGRES_URL = os.getenv("UR_POSTGRES_URL")
@@ -253,6 +277,8 @@ async def test_postgres_langgraph_state_survives_provider_restart() -> None:
             migration_engine=migration_engine,
             application_id=application_id,
             environment="test",
+            workspace_key="workspace",
+            application_key="langgraph_app",
         ) as persistence:
             builder = StateGraph(dict)
             builder.add_node("increment", increment)
@@ -269,6 +295,8 @@ async def test_postgres_langgraph_state_survives_provider_restart() -> None:
             migration_engine=migration_engine,
             application_id=application_id,
             environment="test",
+            workspace_key="workspace",
+            application_key="langgraph_app",
         ) as persistence:
             builder = StateGraph(dict)
             builder.add_node("increment", increment)

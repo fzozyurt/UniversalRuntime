@@ -10,9 +10,14 @@ from universal_runtime.adapters.postgres.database import (
 from universal_runtime.adapters.postgres.langgraph import (
     ManagedLangGraphPersistence,
     PostgresProviderUnavailableError,
+    database_url_for_search_path,
     managed_langgraph_persistence,
 )
-from universal_runtime.adapters.postgres.locks import advisory_migration_lock, migration_lock_key
+from universal_runtime.adapters.postgres.locks import (
+    advisory_migration_lock,
+    advisory_migration_session_lock,
+    migration_lock_key,
+)
 from universal_runtime.adapters.postgres.migration import migrate_platform
 from universal_runtime.adapters.postgres.models import (
     ApplicationRevisionRow,
@@ -69,12 +74,14 @@ __all__ = [
     "WorkerLeaseRow",
     "WorkerRow",
     "advisory_migration_lock",
+    "advisory_migration_session_lock",
     "create_application_engine",
     "create_engine",
     "create_framework_state_engine",
     "create_platform_tables",
     "create_schemas",
     "create_session_factory",
+    "database_url_for_search_path",
     "dispose_engine",
     "managed_langgraph_persistence",
     "migrate_platform",
