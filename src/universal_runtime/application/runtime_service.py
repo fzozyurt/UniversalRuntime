@@ -7,11 +7,21 @@ from datetime import UTC, datetime
 from universal_runtime.domain.errors import ErrorCode, RuntimeFailure
 from universal_runtime.domain.events import RuntimeEvent
 from universal_runtime.domain.execution import ExecutionRequest
-from universal_runtime.domain.identity import AssistantId, ThreadId
+from universal_runtime.domain.identity import (
+    ApplicationId,
+    AssistantId,
+    AttemptId,
+    DeploymentId,
+    ExecutionIdentity,
+    ProjectId,
+    RevisionId,
+    ThreadId,
+    WorkspaceId,
+    new_identifier,
+)
 from universal_runtime.domain.resources import (
     RunRecord,
     ThreadRecord,
-    generated_run_id,
     generated_thread_id,
 )
 from universal_runtime.ports.events import EventStore
@@ -57,26 +67,32 @@ class RuntimeExecutionService:
             assistant_id=AssistantId(request.assistant_id),
             metadata=dict(request.metadata),
         )
+        created = await self._runs.create(run)
         try:
-            created = await self._runs.create(run)
+            await self._commands.publish(request)
         except Exception:
+            await self._runs.update(replace(created, status="error"))
             if thread_id is not None:
                 thread = await self._threads.get(str(thread_id))
                 await self._threads.update(
-                    replace(thread, status="idle", updated_at=datetime.now(UTC))
+                    replace(thread, status="error", updated_at=datetime.now(UTC))
                 )
             raise
-        await self._commands.publish(request)
         await self._events.publish(self._event(request, "run.queued", 0))
         return created
 
     async def cancel_run(self, run_id: str) -> RunRecord:
         run = await self._runs.get(run_id)
+        if run.status == "cancelled":
+            return run
         cancelled = replace(run, status="cancelled")
         await self._runs.update(cancelled)
         if run.thread_id is not None:
             thread = await self._threads.get(str(run.thread_id))
             await self._threads.update(replace(thread, status="idle", updated_at=datetime.now(UTC)))
+        await self._events.publish(
+            self._event_from_run(run, "run.cancelled", 1)
+        )
         return cancelled
 
     async def stream_events(
@@ -88,10 +104,32 @@ class RuntimeExecutionService:
     @staticmethod
     def _event(request: ExecutionRequest, event_type: str, sequence: int) -> RuntimeEvent:
         return RuntimeEvent(
-            event_id=str(generated_run_id()),
+            event_id=new_identifier(),
             sequence=sequence,
             timestamp=datetime.now(UTC),
             identity=request.identity,
             type=event_type,
             data={"assistant_id": request.assistant_id},
+        )
+
+    @staticmethod
+    def _event_from_run(run: RunRecord, event_type: str, sequence: int) -> RuntimeEvent:
+        identity = ExecutionIdentity(
+            workspace_id=WorkspaceId(""),
+            project_id=ProjectId(""),
+            application_id=ApplicationId(""),
+            revision_id=RevisionId(""),
+            deployment_id=DeploymentId(""),
+            assistant_id=run.assistant_id,
+            run_id=run.run_id,
+            attempt_id=AttemptId(""),
+            thread_id=run.thread_id,
+        )
+        return RuntimeEvent(
+            event_id=new_identifier(),
+            sequence=sequence,
+            timestamp=datetime.now(UTC),
+            identity=identity,
+            type=event_type,
+            data={"run_id": str(run.run_id), "status": run.status},
         )

@@ -144,5 +144,5 @@ async def test_local_composition_runs_queue_and_cancellation_flow() -> None:
     cancelled = await runtime.execution.cancel_run("run")
     assert cancelled.status == "cancelled"
     events = [event async for event in runtime.execution.stream_events("run")]
-    assert [event.type for event in events] == ["run.queued"]
+    assert [event.type for event in events] == ["run.queued", "run.cancelled"]
     await runtime.shutdown()

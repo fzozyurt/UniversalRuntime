@@ -16,6 +16,17 @@ class AdapterManifest:
     profiles: frozenset[str]
     stream_modes: frozenset[str]
     capabilities: AdapterCapabilities
+    custom_thread_id: bool = True
+    custom_run_id: bool = True
+    session_affinity: str = "none"
+
+    @property
+    def supported_profiles(self) -> tuple[str, ...]:
+        return tuple(sorted(self.profiles))
+
+    @property
+    def supported_stream_modes(self) -> tuple[str, ...]:
+        return tuple(sorted(self.stream_modes))
 
 
 class RuntimeAdapter(Protocol):
