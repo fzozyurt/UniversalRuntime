@@ -10,6 +10,7 @@ from aiokafka.structs import TopicPartition
 from universal_runtime.domain.errors import ErrorCode, RuntimeFailure
 from universal_runtime.domain.execution import (
     ExecutionRequest,
+    ExecutionTarget,
     QueuePriority,
     RunCommand,
     RunCommandReceipt,
@@ -54,6 +55,10 @@ def _json_command(command: RunCommand) -> bytes:
                 "attempt_id": str(identity.attempt_id),
             },
             "request": {
+                "target": {
+                    "graph_id": request.target.graph_id,
+                    "assistant_version": request.target.assistant_version,
+                },
                 "input": request.input,
                 "command": request.command,
                 "config": request.config,
@@ -90,8 +95,13 @@ def _command(payload: bytes) -> RunCommand:
         ThreadId.parse(raw_identity["thread_id"]) if raw_identity["thread_id"] else None,
     )
     raw_request = value["request"]
+    raw_target = raw_request.get("target") or {}
     request = ExecutionRequest(
         identity=identity,
+        target=ExecutionTarget(
+            str(raw_target.get("graph_id") or raw_identity["assistant_id"]),
+            int(raw_target.get("assistant_version", 1)),
+        ),
         input=raw_request.get("input"),
         command=raw_request.get("command"),
         config=raw_request.get("config", {}),
@@ -162,6 +172,7 @@ class AioKafkaRunCommandQueue(RunCommandQueue):
             headers=[
                 ("runtime-schema-version", b"1"),
                 ("run-id", str(command.identity.run_id).encode()),
+                ("graph-id", command.request.target.graph_id.encode()),
             ],
         )
 
