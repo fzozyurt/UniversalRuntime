@@ -784,7 +784,7 @@ def _runtime_adapter(state: LocalRuntime, assistant_id: str | None = None) -> An
 
 def _compat_state(state: Any) -> JsonObject:
     if hasattr(state, "values"):
-        values = cast(JsonValue, state.values)
+        values = _frontend_value(cast(JsonValue, state.values))
         result: JsonObject = {
             "values": values,
             "next": list(getattr(state, "next", ())),
@@ -797,9 +797,24 @@ def _compat_state(state: Any) -> JsonObject:
         }
         return cast(JsonObject, jsonable_encoder(result))
     if isinstance(state, dict):
-        return cast(JsonObject, state)
+        return cast(JsonObject, _frontend_value(state))
     return {"values": cast(JsonValue, state)}
 
+
+def _frontend_value(value: Any) -> Any:
+    """Normalize text-only LangChain content blocks for string-oriented clients."""
+    if isinstance(value, list):
+        if value and all(
+            isinstance(item, dict)
+            and item.get("type") == "text"
+            and isinstance(item.get("text"), str)
+            for item in value
+        ):
+            return "".join(str(item["text"]) for item in value)
+        return [_frontend_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _frontend_value(item) for key, item in value.items()}
+    return value
 
 def _checkpoint_from_config(config: Any) -> JsonObject | None:
     if not isinstance(config, dict):
@@ -871,7 +886,7 @@ def _sse_response(
                 if stream_mode not in selected_modes:
                     continue
                 event_name = str(stream_mode)
-                encoded_payload = event.data
+                encoded_payload = _frontend_value(event.data)
             yield f"id: {event.sequence}\nevent: {event_name}\ndata: {json.dumps(encoded_payload, separators=(',', ':'))}\n\n"
         if not native:
             yield "event: end\ndata: null\n\n"
