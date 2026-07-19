@@ -1,0 +1,56 @@
+{
+  "version": "1",
+  "matrix": "docs/compatibility/LANGGRAPH_COMPATIBILITY_MATRIX.md",
+  "implemented": [
+    "health",
+    "server_info",
+    "assistant_create",
+    "assistant_get",
+    "assistant_search",
+    "assistant_schemas",
+    "thread_create",
+    "thread_get",
+    "thread_state_get",
+    "thread_state_update",
+    "thread_history",
+    "run_create",
+    "run_stream",
+    "stateless_run_stream",
+    "stateless_run_wait",
+    "run_get",
+    "run_cancel",
+    "agent_card"
+  ],
+  "todo": [
+    {
+      "id": "UR-API-001",
+      "capability": "assistant_update_delete",
+      "level": "MUST",
+      "reason": "OpenAPI paths are reserved for the next compatibility slice."
+    },
+    {
+      "id": "UR-API-002",
+      "capability": "thread_search_update_delete",
+      "level": "MUST",
+      "reason": "Requires the thread repository and native API implementation."
+    },
+    {
+      "id": "UR-API-003",
+      "capability": "store_operations",
+      "level": "MUST",
+      "reason": "Requires the LangGraph store adapter."
+    },
+    {
+      "id": "UR-API-004",
+      "capability": "run_list",
+      "level": "MUST",
+      "reason": "Requires the run repository implementation."
+    },
+    {
+      "id": "UR-API-005",
+      "capability": "interrupt_resume_and_replay",
+      "level": "MUST",
+      "reason": "Requires runtime execution and event replay adapters."
+    }
+  ]
+}
