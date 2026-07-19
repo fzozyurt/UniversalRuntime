@@ -8,6 +8,8 @@ from pathlib import Path
 import yaml
 from jsonschema import Draft202012Validator
 
+from universal_runtime.bootstrap.local import create_local_runtime
+
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SCHEMA_PATH = PROJECT_ROOT / "contracts" / "config" / "runtime-application.schema.json"
 
@@ -17,6 +19,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version="universal-runtime 0.1.0")
     commands = parser.add_subparsers(dest="command")
     commands.add_parser("info", help="print runtime bootstrap information")
+    commands.add_parser("standalone", help="create and shut down the local runtime composition")
     validate = commands.add_parser("validate-config", help="validate a runtime YAML file")
     validate.add_argument("path", type=Path)
     return parser
@@ -40,6 +43,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _validate_config(args.path)
     if args.command == "info":
         print(json.dumps({"version": "0.1.0", "profile": "bootstrap"}))
+        return 0
+    if args.command == "standalone":
+        import asyncio
+
+        async def run() -> None:
+            runtime = create_local_runtime()
+            await runtime.shutdown()
+
+        asyncio.run(run())
+        print(json.dumps({"version": "0.1.0", "profile": "standalone"}))
         return 0
     _parser().print_help()
     return 0

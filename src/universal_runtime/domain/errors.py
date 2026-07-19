@@ -1,0 +1,34 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import StrEnum
+from typing import Any
+
+
+class ErrorCode(StrEnum):
+    ADAPTER_NOT_SUPPORTED = "ADAPTER_NOT_SUPPORTED"
+    CAPABILITY_NOT_SUPPORTED = "CAPABILITY_NOT_SUPPORTED"
+    THREAD_BUSY = "THREAD_BUSY"
+    RUN_NOT_FOUND = "RUN_NOT_FOUND"
+    INVALID_EXECUTION_INPUT = "INVALID_EXECUTION_INPUT"
+    EXECUTION_CANCELLED = "EXECUTION_CANCELLED"
+    EXECUTION_TIMEOUT = "EXECUTION_TIMEOUT"
+    INFRASTRUCTURE_UNAVAILABLE = "INFRASTRUCTURE_UNAVAILABLE"
+    FRAMEWORK_EXECUTION_FAILED = "FRAMEWORK_EXECUTION_FAILED"
+    MIGRATION_LOCKED = "MIGRATION_LOCKED"
+    RESOURCE_NOT_FOUND = "RESOURCE_NOT_FOUND"
+    QUEUE_CLOSED = "QUEUE_CLOSED"
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeFailureError(Exception):
+    code: ErrorCode
+    message: str
+    retryable: bool = False
+    details: dict[str, Any] = field(default_factory=dict)
+
+    def __str__(self) -> str:
+        return f"{self.code}: {self.message}"
+
+
+RuntimeFailure = RuntimeFailureError
