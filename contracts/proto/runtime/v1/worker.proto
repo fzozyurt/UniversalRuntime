@@ -41,6 +41,8 @@ message RegisterWorkerRequest {
   string config_hash = 7;
   WorkerCapabilities capabilities = 8;
   google.protobuf.Struct metadata = 9;
+  repeated string graph_ids = 10;
+  string grpc_target = 11;
 }
 
 message RegisterWorkerResponse {
