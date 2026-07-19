@@ -19,6 +19,7 @@ from universal_runtime.adapters.postgres.repositories import (
     PostgresThreadRepository,
 )
 from universal_runtime.bootstrap.runtime_config import LauncherConfig
+from universal_runtime.domain.errors import ErrorCode, RuntimeFailure
 from universal_runtime.domain.events import RuntimeEventDraft, RuntimeEventType
 from universal_runtime.domain.execution import RunError, RunStatus
 from universal_runtime.domain.identity import ExecutionIdentity
@@ -88,12 +89,9 @@ class Dispatcher:
 
     async def run(self, stop: asyncio.Event) -> None:
         while not stop.is_set():
-            try:
-                receipt = await asyncio.wait_for(
-                    self.queue.receive(self._worker_id()), timeout=1.0
-                )
-            except TimeoutError:
-                continue
+            # Do not cancel an aiokafka poll on a short timeout. Cancellation during
+            # rebalance leaks the consumer and creates an endless group rebalance loop.
+            receipt = await self.queue.receive(self._worker_id())
             await self._dispatch(receipt)
 
     def _worker_id(self) -> Any:
@@ -102,7 +100,13 @@ class Dispatcher:
         return WorkerId.parse(os.environ.get("UR_INSTANCE_ID", "dispatcher"))
 
     async def _dispatch(self, receipt: Any) -> None:
-        run = await self.runs.get(str(receipt.identity.run_id))
+        try:
+            run = await self.runs.get(str(receipt.identity.run_id))
+        except RuntimeFailure as exc:
+            if exc.code is ErrorCode.RUN_NOT_FOUND:
+                await self.queue.acknowledge(receipt)
+                return
+            raise
         if run.status is not RunStatus.PENDING:
             await self.queue.acknowledge(receipt)
             return
@@ -162,7 +166,7 @@ class Dispatcher:
                 await self.runs.update(current.complete(last_result, datetime.now(UTC)))
             if run.thread_id:
                 thread = await self.threads.get(str(run.thread_id))
-                await self.threads.update(thread.mark_idle())
+                await self.threads.update(thread.mark_idle(datetime.now(UTC)))
             await self.queue.acknowledge(receipt)
         except Exception as exc:
             current = await self.runs.get(str(run.run_id))
@@ -173,9 +177,16 @@ class Dispatcher:
                     data={"error": str(exc)},
                 )
             )
-            await self.runs.update(
-                current.fail(RunError("DISPATCH_FAILED", str(exc)), datetime.now(UTC))
-            )
+            if current.status not in {
+                RunStatus.SUCCESS,
+                RunStatus.ERROR,
+                RunStatus.TIMEOUT,
+                RunStatus.CANCELLED,
+                RunStatus.INTERRUPTED,
+            }:
+                await self.runs.update(
+                    current.fail(RunError("DISPATCH_FAILED", str(exc)), datetime.now(UTC))
+                )
             await self.queue.acknowledge(receipt)
 
     async def close(self) -> None:
