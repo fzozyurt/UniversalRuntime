@@ -13,7 +13,6 @@ from universal_runtime.domain.primitives.json_types import JsonObject, JsonValue
 @dataclass(frozen=True, slots=True)
 class ExecutionRequest:
     identity: ExecutionIdentity
-    target: ExecutionTarget = field(default_factory=lambda: ExecutionTarget("default"))
     input: JsonValue = None
     command: JsonValue = None
     config: JsonObject = field(default_factory=dict)
@@ -25,6 +24,7 @@ class ExecutionRequest:
     timeout_seconds: int = 1800
     checkpoint_namespace: str = ""
     checkpoint_id: str | None = None
+    target: ExecutionTarget = field(default_factory=lambda: ExecutionTarget("default"))
 
     def __post_init__(self) -> None:
         for name in ("config", "context", "metadata"):
