@@ -69,6 +69,8 @@ def create_local_runtime(*, max_concurrency: int = 8) -> LocalRuntime:
             journal=events,
             replay=events,
             subscription=events,
+            outbox=outbox,
+            assistants=assistants,
             adapters=adapters,
             capacity=capacity,
         ),
