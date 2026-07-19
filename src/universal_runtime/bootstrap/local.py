@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from universal_runtime.adapters.memory.capacity import ExecutionCapacity
 from universal_runtime.adapters.memory.configuration import InMemoryApplicationConfigRepository
@@ -14,6 +15,7 @@ from universal_runtime.adapters.memory.repositories import (
     InMemoryThreadRepository,
 )
 from universal_runtime.application.runtime_service import RuntimeExecutionService
+from universal_runtime.ports.registry import AdapterRegistry
 
 
 @dataclass(slots=True)
@@ -25,10 +27,11 @@ class LocalRuntime:
     runs: InMemoryRunRepository
     events: InMemoryEventJournal
     commands: InMemoryPriorityQueue
-    adapters: InMemoryAdapterRegistry
+    adapters: AdapterRegistry
     capacity: ExecutionCapacity
     execution: RuntimeExecutionService
     execute_locally: bool = True
+    database_engine: Any | None = None
 
     async def start(self) -> None:
         if self.execute_locally:
@@ -40,6 +43,8 @@ class LocalRuntime:
         if close is not None:
             await close()
         await self.capacity.drain()
+        if self.database_engine is not None:
+            await self.database_engine.dispose()
 
 
 def create_local_runtime(*, max_concurrency: int = 8) -> LocalRuntime:

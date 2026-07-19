@@ -90,10 +90,52 @@ def create_app(
     )
     app.state.runtime = state
     app.state.worker_registry = {}
+    app.state.a2a_task_store = None
+    a2a_routes_added = a2a_assistant is not None and a2a_manifest is not None
+    if os.environ.get("UR_PROFILE", "local") == "production" and os.environ.get(
+        "UR_A2A_ENABLED", "false"
+    ).lower() in {"1", "true", "yes", "on"}:
+        from a2a.server.tasks import DatabaseTaskStore
+
+        app.state.a2a_task_store = DatabaseTaskStore(
+            state.database_engine,
+            create_table=True,
+            table_name="a2a_tasks",
+        )
 
     @app.on_event("startup")
     async def start_local_execution() -> None:
+        nonlocal a2a_routes_added
         await _auto_register_application(state, app)
+        if (
+            not a2a_routes_added
+            and os.environ.get("UR_A2A_ENABLED", "false").lower()
+            in {"1", "true", "yes", "on"}
+        ):
+            configured_id = os.environ.get("UR_A2A_ASSISTANT_ID")
+            assistants = await state.assistants.all()
+            selected = [
+                item
+                for item in assistants
+                if configured_id is None or str(item.assistant_id) == configured_id
+            ]
+            if len(selected) != 1:
+                raise RuntimeError(
+                    "UR_A2A_ASSISTANT_ID must select exactly one registered assistant"
+                )
+            selected_assistant = selected[0]
+            selected_manifest = _runtime_adapter(
+                state, str(selected_assistant.assistant_id)
+            ).manifest
+            for route in create_a2a_routes(
+                runtime=state,
+                assistant=selected_assistant,
+                manifest=selected_manifest,
+                public_url=os.environ.get("UR_A2A_PUBLIC_URL", "http://localhost:8080"),
+                task_store=app.state.a2a_task_store,
+            ):
+                app.routes.append(route)
+            a2a_routes_added = True
         await state.start()
 
     @app.on_event("shutdown")
@@ -114,6 +156,7 @@ def create_app(
             assistant=a2a_assistant,
             manifest=a2a_manifest,
             public_url=a2a_public_url,
+            task_store=app.state.a2a_task_store,
         ):
             app.routes.append(route)
 

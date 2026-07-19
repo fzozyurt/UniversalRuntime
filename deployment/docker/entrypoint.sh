@@ -3,7 +3,7 @@ set -euo pipefail
 
 MODE="${UR_MODE:-worker}"
 case "$MODE" in
-  validate|inspect|migrate|gateway|dispatcher|worker|projector|api|standalone) ;;
+  validate|inspect|migrate|all|gateway|dispatcher|worker|projector|api|standalone) ;;
   *) echo "unsupported UR_MODE: $MODE" >&2; exit 64 ;;
 esac
 

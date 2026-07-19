@@ -45,10 +45,21 @@ async def _serve(config: LauncherConfig) -> None:
     http_server = uvicorn.Server(uvicorn_config)
     http_task = asyncio.create_task(http_server.serve())
 
-    module_name, attribute = os.environ["UR_APPLICATION_ENTRYPOINT"].split(":", 1)
-    target = getattr(importlib.import_module(module_name), attribute)
+    raw_entrypoints = os.environ.get("UR_APPLICATION_ENTRYPOINTS") or os.environ.get(
+        "UR_APPLICATION_ENTRYPOINT"
+    )
+    if not raw_entrypoints:
+        raise RuntimeError("UR_APPLICATION_ENTRYPOINT or UR_APPLICATION_ENTRYPOINTS is required")
+    entrypoints = [item.strip() for item in raw_entrypoints.split(",") if item.strip()]
     database_url = os.environ["UR_DATABASE_URL"]
-    engine = create_engine(database_url, pool_size=30, max_overflow=10)
+    engine = getattr(app.state.runtime, "database_engine", None)
+    owns_engine = engine is None
+    if engine is None:
+        engine = create_engine(
+            database_url,
+            pool_size=int(os.environ.get("UR_WORKER_DB_POOL_SIZE", "30")),
+            max_overflow=int(os.environ.get("UR_WORKER_DB_MAX_OVERFLOW", "10")),
+        )
     context = managed_langgraph_persistence(
         database_url,
         migration_engine=engine,
@@ -58,15 +69,22 @@ async def _serve(config: LauncherConfig) -> None:
         application_key=os.environ.get("UR_APPLICATION_ID", "default"),
     )
     persistence = await context.__aenter__()
-    adapter = LangGraphAdapter(
-        target,
-        persistence_mode="platform-managed",
-        providers=postgres_persistence(persistence.checkpointer, persistence.store),
-    )
+    adapters = {}
+    for entrypoint in entrypoints:
+        module_name, attribute = entrypoint.split(":", 1)
+        target = getattr(importlib.import_module(module_name), attribute)
+        adapter = LangGraphAdapter(
+            target,
+            persistence_mode="platform-managed",
+            providers=postgres_persistence(persistence.checkpointer, persistence.store),
+        )
+        adapters[adapter.descriptor.graph_id] = adapter
     worker = WorkerServer.create(
-        configured_concurrency=config.worker_max_concurrency,
+        configured_concurrency=int(
+            os.getenv("UR_WORKER_CONFIGURED_CONCURRENCY", str(config.worker_max_concurrency))
+        ),
         policy_ceiling=int(os.getenv("UR_WORKER_POLICY_CEILING", "64")),
-        adapter=adapter,
+        adapter=adapters,
     )
     dispatcher = Dispatcher()
     stop = asyncio.Event()
@@ -84,7 +102,8 @@ async def _serve(config: LauncherConfig) -> None:
     finally:
         await dispatcher.close()
         await context.__aexit__(None, None, None)
-        await engine.dispose()
+        if owns_engine:
+            await engine.dispose()
 
 
 def main(*, run_forever: bool = True) -> int:

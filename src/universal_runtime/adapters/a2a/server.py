@@ -29,6 +29,7 @@ def create_a2a_routes(
     manifest: AdapterManifest,
     public_url: str,
     card_path: str = "/.well-known/agent-card.json",
+    task_store: Any | None = None,
 ) -> Sequence[Any]:
     """Create official SDK routes; user application code is never imported here."""
     try:
@@ -99,13 +100,13 @@ def create_a2a_routes(
             del context
             return str(RunId.new())
 
-    task_store = InMemoryTaskStore()
+    configured_task_store = task_store or InMemoryTaskStore()
     handler = DefaultRequestHandler(
         agent_executor=RuntimeExecutor(),
-        task_store=task_store,
+        task_store=configured_task_store,
         agent_card=card,
         request_context_builder=SimpleRequestContextBuilder(
-            task_store=task_store,
+            task_store=configured_task_store,
             task_id_generator=RuntimeIdGenerator(),
         ),
     )

@@ -5,7 +5,6 @@ from typing import Any, cast
 
 from universal_runtime.adapters.kafka import AioKafkaRunCommandQueue, TopicNames
 from universal_runtime.adapters.memory.capacity import ExecutionCapacity
-from universal_runtime.adapters.memory.registry import InMemoryAdapterRegistry
 from universal_runtime.adapters.postgres.database import create_engine, create_session_factory
 from universal_runtime.adapters.postgres.events import PostgresEventJournal
 from universal_runtime.adapters.postgres.repositories import (
@@ -14,6 +13,7 @@ from universal_runtime.adapters.postgres.repositories import (
     PostgresRunRepository,
     PostgresThreadRepository,
 )
+from universal_runtime.adapters.registry import ProcessAdapterRegistry
 from universal_runtime.application.runtime_service import RuntimeExecutionService
 from universal_runtime.bootstrap.local import LocalRuntime
 
@@ -43,7 +43,7 @@ def create_production_runtime() -> LocalRuntime:
         group_id=f"{os.environ.get('UR_APPLICATION_ID', 'default')}.gateway",
     )
     capacity = ExecutionCapacity(int(os.environ.get("UR_WORKER_MAX_CONCURRENCY", "8")))
-    adapters = InMemoryAdapterRegistry()
+    adapters = ProcessAdapterRegistry()
     return LocalRuntime(
         config=PostgresApplicationConfigRepository(
             sessions, os.environ.get("UR_KAFKA_ENVIRONMENT", "local")
@@ -67,4 +67,5 @@ def create_production_runtime() -> LocalRuntime:
             capacity=capacity,
         ),
         execute_locally=False,
+        database_engine=engine,
     )

@@ -15,6 +15,10 @@ _LOGGER = logging.getLogger(__name__)
 _STATE: TelemetryRuntime | None = None
 
 
+def _is_sdk_provider(provider: Any) -> bool:
+    return provider.__class__.__module__.startswith("opentelemetry.sdk.")
+
+
 @dataclass(slots=True)
 class TelemetryRuntime:
     settings: TelemetrySettings
@@ -71,8 +75,17 @@ def initialize(
                 extra=attributes,
             )
         )
-        provider = TracerProvider(resource=resource)
-        if settings.traces_exporter.lower() != "none" and settings.otlp_endpoint:
+        current_tracer_provider = trace.get_tracer_provider()
+        provider = (
+            current_tracer_provider
+            if _is_sdk_provider(current_tracer_provider)
+            else TracerProvider(resource=resource)
+        )
+        if (
+            provider is not current_tracer_provider
+            and settings.traces_exporter.lower() != "none"
+            and settings.otlp_endpoint
+        ):
             from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 
             provider.add_span_processor(
@@ -82,10 +95,11 @@ def initialize(
                     )
                 )
             )
-        trace.set_tracer_provider(provider)
+        if provider is not current_tracer_provider:
+            trace.set_tracer_provider(provider)
         readers = (
             []
-            if settings.metrics_exporter.lower() == "none"
+            if settings.metrics_exporter.lower() == "none" or not settings.otlp_endpoint
             else [
                 PeriodicExportingMetricReader(
                     OTLPMetricExporter(
@@ -94,8 +108,14 @@ def initialize(
                 )
             ]
         )
-        meter_provider = MeterProvider(resource=resource, metric_readers=readers)
-        metrics.set_meter_provider(meter_provider)
+        current_meter_provider = metrics.get_meter_provider()
+        meter_provider = (
+            current_meter_provider
+            if _is_sdk_provider(current_meter_provider)
+            else MeterProvider(resource=resource, metric_readers=readers)
+        )
+        if meter_provider is not current_meter_provider:
+            metrics.set_meter_provider(meter_provider)
         runtime = TelemetryRuntime(
             settings,
             trace.get_tracer("universal-runtime"),

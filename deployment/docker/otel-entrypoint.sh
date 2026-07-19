@@ -5,7 +5,7 @@ set -euo pipefail
 # Exporter configuration is read by the OTel SDK; secrets are never printed.
 MODE="${UR_MODE:-worker}"
 case "$MODE" in
-  validate|inspect|migrate|gateway|dispatcher|worker|projector|api|standalone) ;;
+  validate|inspect|migrate|all|gateway|dispatcher|worker|projector|api|standalone) ;;
   *) printf '%s\n' "unsupported UR_MODE: $MODE" >&2; exit 64 ;;
 esac
 
