@@ -68,7 +68,8 @@ async def _serve(config: LauncherConfig) -> None:
 
     server = create_server(adapters)
     await server.start_listening(config.grpc_host, config.grpc_port)
-    await _register_with_gateway(adapters, server, config)
+    await _publish_registration(adapters, server, config)
+    heartbeat_task = asyncio.create_task(_registration_loop(adapters, server, config))
     stopped = asyncio.Event()
     loop = asyncio.get_running_loop()
     loop.add_signal_handler(signal.SIGTERM, stopped.set)
@@ -76,15 +77,26 @@ async def _serve(config: LauncherConfig) -> None:
     try:
         await stopped.wait()
     finally:
+        heartbeat_task.cancel()
+        await asyncio.gather(heartbeat_task, return_exceptions=True)
         await server.stop(config.worker_drain_timeout_seconds)
         await persistence_context.__aexit__(None, None, None)
         await engine.dispose()
 
 
-async def _register_with_gateway(
+async def _registration_loop(
     adapters: dict[str, LangGraphAdapter], server: WorkerServer, config: LauncherConfig
 ) -> None:
-    """Advertise one application deployment replica and its graph catalog."""
+    interval = max(1, int(os.environ.get("UR_WORKER_HEARTBEAT_SECONDS", "10")))
+    while True:
+        await asyncio.sleep(interval)
+        await _publish_registration(adapters, server, config)
+
+
+async def _publish_registration(
+    adapters: dict[str, LangGraphAdapter], server: WorkerServer, config: LauncherConfig
+) -> None:
+    """Advertise one application deployment replica and its current capacity."""
     url = os.environ.get("UR_GATEWAY_REGISTER_URL")
     if not url:
         return
@@ -100,6 +112,7 @@ async def _register_with_gateway(
     target = os.environ.get(
         "UR_WORKER_ADVERTISE_TARGET", f"{config.grpc_host}:{config.grpc_port}"
     )
+    status = "busy" if server.worker.available_slots == 0 else "ready"
     payload = {
         "worker_id": os.environ.get("UR_INSTANCE_ID", "worker"),
         "target": target,
@@ -114,7 +127,7 @@ async def _register_with_gateway(
         "max_concurrency": server.worker.max_concurrency,
         "active_executions": server.worker.active_executions,
         "available_slots": server.worker.available_slots,
-        "status": "ready",
+        "status": status,
     }
     timeout = httpx.Timeout(3.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
