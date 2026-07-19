@@ -79,6 +79,16 @@ class RunCreate(TransportModel):
     stream_subgraphs: bool = False
     priority: Literal["interactive", "normal", "batch"] = "interactive"
     multitask_strategy: Literal["reject", "enqueue", "interrupt", "rollback"] = "reject"
+    stream_resumable: bool = False
+    interrupt_before: list[str] | None = None
+    interrupt_after: list[str] | None = None
+    checkpoint: JsonObject | None = None
+    checkpoint_id: str | None = None
+    if_not_exists: Literal["reject", "create"] | None = None
+    on_completion: Literal["delete", "keep"] | None = None
+    after_seconds: int | None = None
+    durability: Literal["sync", "async", "exit"] | None = None
+    langsmith_tracer: JsonObject | None = None
 
 
 class Run(TransportModel):
