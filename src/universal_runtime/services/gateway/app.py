@@ -28,6 +28,7 @@ from universal_runtime.domain.identity import (
     WorkspaceId,
 )
 from universal_runtime.domain.primitives.json_types import JsonObject, JsonValue
+from universal_runtime.services.gateway.custom_http_routes import create_custom_http_router
 from universal_runtime.transport.http.dto import (
     AssistantCreate,
     NativeErrorResponse,
@@ -43,11 +44,15 @@ SCHEMA_PATH = (
 )
 
 
-def create_app(runtime: LocalRuntime | None = None) -> FastAPI:
+def create_app(
+    runtime: LocalRuntime | None = None, *, custom_http_target: str | None = None
+) -> FastAPI:
     state = runtime or create_local_runtime()
     schema = _load_schema()
     app = FastAPI(title="UniversalRuntime Gateway", version="0.1.0")
     app.state.runtime = state
+    if custom_http_target is not None:
+        app.include_router(create_custom_http_router(custom_http_target))
 
     @app.middleware("http")
     async def request_id(request: Request, call_next: Any) -> Any:

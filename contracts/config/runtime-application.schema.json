@@ -173,6 +173,17 @@
             "mountPath": {
               "type": "string",
               "pattern": "^/"
+            },
+            "proxy": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "trustedProxies": {"type": "array", "items": {"type": "string"}},
+                "connectTimeoutSeconds": {"type": "number", "exclusiveMinimum": 0},
+                "readTimeoutSeconds": {"type": "number", "exclusiveMinimum": 0},
+                "maxRequestBytes": {"type": "integer", "minimum": 1},
+                "maxResponseBytes": {"type": "integer", "minimum": 1}
+              }
             }
           }
         }
