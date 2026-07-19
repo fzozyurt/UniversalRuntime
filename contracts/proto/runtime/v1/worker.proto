@@ -1,0 +1,105 @@
+syntax = "proto3";
+
+package runtime.v1;
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "runtime/v1/execution.proto";
+
+option java_multiple_files = true;
+option java_package = "ai.runtime.v1";
+
+service WorkerControlService {
+  rpc Register(RegisterWorkerRequest) returns (RegisterWorkerResponse);
+  rpc Work(stream WorkerMessage) returns (stream ControllerMessage);
+  rpc Drain(DrainWorkerRequest) returns (google.protobuf.Empty);
+}
+
+message WorkerCapabilities {
+  string adapter_id = 1;
+  string adapter_version = 2;
+  repeated string profiles = 3;
+  repeated string stream_modes = 4;
+  bool checkpoint = 5;
+  bool state = 6;
+  bool history = 7;
+  bool interrupt = 8;
+  bool resume = 9;
+  bool custom_http = 10;
+  bool a2a = 11;
+  string session_affinity = 12;
+}
+
+message RegisterWorkerRequest {
+  string worker_id = 1;
+  string application_id = 2;
+  string revision_id = 3;
+  string deployment_id = 4;
+  string pod_name = 5;
+  int32 max_concurrency = 6;
+  string config_hash = 7;
+  WorkerCapabilities capabilities = 8;
+  google.protobuf.Struct metadata = 9;
+}
+
+message RegisterWorkerResponse {
+  bool accepted = 1;
+  string reason = 2;
+  int32 heartbeat_interval_seconds = 3;
+  google.protobuf.Struct resolved_execution_defaults = 4;
+}
+
+message WorkerHeartbeat {
+  string worker_id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  int32 active_executions = 3;
+  int32 available_slots = 4;
+}
+
+message LeaseAccepted {
+  string lease_id = 1;
+  string run_id = 2;
+}
+
+message LeaseRejected {
+  string lease_id = 1;
+  string run_id = 2;
+  string reason = 3;
+}
+
+message WorkerMessage {
+  oneof payload {
+    WorkerHeartbeat heartbeat = 1;
+    LeaseAccepted lease_accepted = 2;
+    LeaseRejected lease_rejected = 3;
+    RuntimeEvent event = 4;
+    InvokeResponse completion = 5;
+  }
+}
+
+message RunLease {
+  string lease_id = 1;
+  google.protobuf.Timestamp expires_at = 2;
+  InvokeRequest invocation = 3;
+}
+
+message CancelLease {
+  string run_id = 1;
+  string attempt_id = 2;
+  string reason = 3;
+}
+
+message ControllerMessage {
+  oneof payload {
+    RunLease run_lease = 1;
+    CancelLease cancel = 2;
+    google.protobuf.Struct config_update = 3;
+    bool drain = 4;
+  }
+}
+
+message DrainWorkerRequest {
+  string worker_id = 1;
+  int32 timeout_seconds = 2;
+}

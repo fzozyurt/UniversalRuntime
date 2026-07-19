@@ -1,0 +1,14 @@
+version: v2
+plugins:
+  - remote: buf.build/protocolbuffers/python
+    out: generated/python
+  - remote: buf.build/grpc/python
+    out: generated/python
+  - remote: buf.build/protocolbuffers/java
+    out: generated/java
+  - remote: buf.build/grpc/java
+    out: generated/java
+  - remote: buf.build/bufbuild/es
+    out: generated/typescript
+    opt:
+      - target=ts

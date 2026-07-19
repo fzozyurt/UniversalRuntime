@@ -1,0 +1,397 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://runtime.ai/schemas/runtime-application-v1alpha1.json",
+  "title": "RuntimeApplication",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "runtime.ai/v1alpha1"
+    },
+    "kind": {
+      "const": "RuntimeApplication"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{1,62}$"
+        },
+        "project": {
+          "type": "string",
+          "default": "default"
+        },
+        "environment": {
+          "type": "string",
+          "default": "local"
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runtime"
+      ],
+      "properties": {
+        "runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "adapter",
+            "entrypoints"
+          ],
+          "properties": {
+            "adapter": {
+              "type": "string",
+              "enum": [
+                "langgraph",
+                "auto"
+              ]
+            },
+            "profile": {
+              "type": "string",
+              "enum": [
+                "auto",
+                "langgraph",
+                "langchain-agent",
+                "deepagents"
+              ],
+              "default": "auto"
+            },
+            "language": {
+              "const": "python"
+            },
+            "entrypoints": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "graphs"
+              ],
+              "properties": {
+                "graphs": {
+                  "type": "object",
+                  "minProperties": 1,
+                  "additionalProperties": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_]*$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "discovery": {
+          "$ref": "#/$defs/discovery"
+        },
+        "http": {
+          "$ref": "#/$defs/http"
+        },
+        "execution": {
+          "$ref": "#/$defs/execution"
+        },
+        "persistence": {
+          "$ref": "#/$defs/persistence"
+        },
+        "queue": {
+          "$ref": "#/$defs/queue"
+        },
+        "observability": {
+          "$ref": "#/$defs/observability"
+        },
+        "a2a": {
+          "$ref": "#/$defs/a2a"
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "discovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "isolatedImport": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "http": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "fastapi": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "detect": {
+              "type": "boolean",
+              "default": true
+            },
+            "entrypoint": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "mountPath": {
+              "type": "string",
+              "pattern": "^/"
+            }
+          }
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "defaultPriority": {
+          "enum": [
+            "interactive",
+            "normal",
+            "batch"
+          ],
+          "default": "interactive"
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1800
+        },
+        "worker": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxConcurrency": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1024,
+              "default": 8
+            },
+            "drainTimeoutSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 30
+            }
+          }
+        },
+        "thread": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxActiveRuns": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          }
+        }
+      }
+    },
+    "persistenceMode": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "enum": [
+            "platform-managed",
+            "application-managed",
+            "disabled"
+          ],
+          "default": "platform-managed"
+        },
+        "provider": {
+          "enum": [
+            "auto",
+            "memory",
+            "postgres"
+          ],
+          "default": "auto"
+        },
+        "connectionRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "checkpoint": {
+          "$ref": "#/$defs/persistenceMode"
+        },
+        "store": {
+          "$ref": "#/$defs/persistenceMode"
+        },
+        "applicationDatabase": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "connectionRef": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "migrations": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "provider": {
+                  "enum": [
+                    "alembic"
+                  ]
+                },
+                "config": {
+                  "type": "string"
+                },
+                "command": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "queue": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "enum": [
+            "auto",
+            "memory",
+            "kafka"
+          ],
+          "default": "auto"
+        },
+        "prefix": {
+          "type": "string",
+          "default": "rt"
+        },
+        "environment": {
+          "type": "string",
+          "default": "local"
+        },
+        "topics": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "fairness": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "interactiveWeight": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 8
+            },
+            "normalWeight": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 3
+            },
+            "batchWeight": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            },
+            "agePromotionSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 120
+            }
+          }
+        }
+      }
+    },
+    "observability": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "openlit": {
+          "type": "boolean",
+          "default": false
+        },
+        "contentCapture": {
+          "enum": [
+            "none",
+            "metadata",
+            "redacted",
+            "full"
+          ],
+          "default": "metadata"
+        }
+      }
+    },
+    "a2a": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "streaming": {
+          "type": "boolean",
+          "default": true
+        },
+        "agentCardPath": {
+          "type": "string",
+          "default": "/.well-known/agent-card.json"
+        }
+      }
+    }
+  }
+}

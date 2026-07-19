@@ -1,0 +1,65 @@
+apiVersion: runtime.ai/v1alpha1
+kind: RuntimeApplication
+metadata:
+  name: example-agent
+  project: default
+  environment: local
+spec:
+  runtime:
+    adapter: langgraph
+    profile: auto
+    language: python
+    entrypoints:
+      graphs:
+        agent: examples.langgraph_basic.agent:graph
+  discovery:
+    enabled: true
+    isolatedImport: true
+  http:
+    enabled: true
+    fastapi:
+      detect: true
+      entrypoint: null
+      mountPath: /http
+  execution:
+    defaultPriority: interactive
+    timeoutSeconds: 1800
+    worker:
+      maxConcurrency: 8
+      drainTimeoutSeconds: 30
+    thread:
+      maxActiveRuns: 1
+  persistence:
+    checkpoint:
+      mode: platform-managed
+      provider: auto
+    store:
+      mode: platform-managed
+      provider: auto
+    applicationDatabase:
+      enabled: false
+      migrations:
+        provider: alembic
+        config: alembic.ini
+        command: upgrade head
+  queue:
+    provider: auto
+    prefix: rt
+    environment: local
+    topics: {}
+    fairness:
+      interactiveWeight: 8
+      normalWeight: 3
+      batchWeight: 1
+      agePromotionSeconds: 120
+  observability:
+    enabled: false
+    openlit: false
+    contentCapture: metadata
+  a2a:
+    enabled: true
+    streaming: true
+    agentCardPath: /.well-known/agent-card.json
+  env:
+    MODEL_NAME: ${MODEL_NAME:-test-model}
+    OPENAI_API_KEY: ${OPENAI_API_KEY:-}

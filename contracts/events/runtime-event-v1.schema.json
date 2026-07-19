@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://runtime.ai/schemas/runtime-event-v1.json",
+  "title": "RuntimeEventV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "event_id",
+    "sequence",
+    "timestamp",
+    "application_id",
+    "run_id",
+    "type",
+    "namespace",
+    "data"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "event_id": {
+      "type": "string"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "application_id": {
+      "type": "string"
+    },
+    "revision_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "deployment_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "assistant_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "thread_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "attempt_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "type": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_.-]+$"
+    },
+    "namespace": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "data": {},
+    "trace": {
+      "type": "object",
+      "additionalProperties": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "native": {
+      "type": "object"
+    }
+  }
+}

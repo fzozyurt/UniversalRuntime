@@ -1,0 +1,79 @@
+syntax = "proto3";
+
+package runtime.v1;
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+option java_multiple_files = true;
+option java_package = "ai.runtime.v1";
+
+service ExecutionService {
+  rpc Invoke(InvokeRequest) returns (InvokeResponse);
+  rpc Stream(StreamRequest) returns (stream RuntimeEvent);
+  rpc Cancel(CancelRequest) returns (google.protobuf.Empty);
+}
+
+enum QueuePriority {
+  QUEUE_PRIORITY_UNSPECIFIED = 0;
+  QUEUE_PRIORITY_BATCH = 10;
+  QUEUE_PRIORITY_NORMAL = 50;
+  QUEUE_PRIORITY_INTERACTIVE = 100;
+}
+
+message ExecutionIdentity {
+  string workspace_id = 1;
+  string project_id = 2;
+  string application_id = 3;
+  string revision_id = 4;
+  string deployment_id = 5;
+  string assistant_id = 6;
+  string thread_id = 7;
+  string run_id = 8;
+  string attempt_id = 9;
+}
+
+message InvokeRequest {
+  ExecutionIdentity identity = 1;
+  google.protobuf.Value input = 2;
+  google.protobuf.Value command = 3;
+  google.protobuf.Struct config = 4;
+  google.protobuf.Struct context = 5;
+  google.protobuf.Struct metadata = 6;
+  repeated string stream_modes = 7;
+  bool stream_subgraphs = 8;
+  QueuePriority priority = 9;
+  int32 timeout_seconds = 10;
+}
+
+message StreamRequest {
+  InvokeRequest invocation = 1;
+  string after_event_id = 2;
+  int64 after_sequence = 3;
+}
+
+message InvokeResponse {
+  string run_id = 1;
+  string status = 2;
+  google.protobuf.Value output = 3;
+  google.protobuf.Struct error = 4;
+}
+
+message CancelRequest {
+  ExecutionIdentity identity = 1;
+  string action = 2;
+}
+
+message RuntimeEvent {
+  int32 schema_version = 1;
+  string event_id = 2;
+  int64 sequence = 3;
+  google.protobuf.Timestamp timestamp = 4;
+  ExecutionIdentity identity = 5;
+  string type = 6;
+  repeated string namespace = 7;
+  google.protobuf.Value data = 8;
+  google.protobuf.Struct trace = 9;
+  google.protobuf.Struct native = 10;
+}
