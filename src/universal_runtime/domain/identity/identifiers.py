@@ -12,7 +12,13 @@ def _generate_uuid7() -> str:
     timestamp_ms = int(time.time() * 1000) & ((1 << 48) - 1)
     random_a = secrets.randbits(12)
     random_b = secrets.randbits(62)
-    value = (timestamp_ms << 80) | (0x7 << 76) | (random_a << 64) | (0x2 << 62) | random_b
+    value = (
+        (timestamp_ms << 80)
+        | (0x7 << 76)
+        | (random_a << 64)
+        | (0x2 << 62)
+        | random_b
+    )
     return str(UUID(int=value))
 
 
@@ -36,12 +42,19 @@ class TypedId:
         return self.value
 
     def __eq__(self, other: object) -> bool:
-        if isinstance(other, TypedId):
-            return type(self) is type(other) and self.value == other.value
-        return self.value == other
+        if isinstance(other, str):
+            return self.value == other
+        return (
+            isinstance(other, TypedId)
+            and type(self) is type(other)
+            and self.value == other.value
+        )
 
     def __hash__(self) -> int:
-        return hash((type(self), self.value))
+        # Typed IDs intentionally compare equal to their transport string for
+        # backwards-compatible API/test ergonomics. Hashing by value preserves
+        # Python's equality/hash contract while different ID classes remain unequal.
+        return hash(self.value)
 
 
 class WorkspaceId(TypedId):

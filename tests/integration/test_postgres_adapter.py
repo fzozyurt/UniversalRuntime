@@ -41,16 +41,23 @@ def test_schema_names_are_scoped_and_validated() -> None:
 
 
 def test_fixed_search_path_accepts_only_identifiers() -> None:
-    assert _is_safe_search_path("rt_a_workspace_application_local,public")
-    assert not _is_safe_search_path("rt_a_workspace;drop schema,public")
+    assert _is_safe_search_path(
+        "rt_a_workspace_application_local,public"
+    )
+    assert not _is_safe_search_path(
+        "rt_a_workspace;drop schema,public"
+    )
     assert not _is_safe_search_path("rt_a_workspace, public")
 
 
 def test_langgraph_database_url_is_pinned_to_framework_schema() -> None:
-    from universal_runtime.adapters.postgres.langgraph import database_url_for_search_path
+    from universal_runtime.adapters.postgres.langgraph import (
+        database_url_for_search_path,
+    )
 
     url = database_url_for_search_path(
-        "postgresql+psycopg://runtime:secret@localhost/runtime", "rt_s_workspace_app_local"
+        "postgresql+psycopg://runtime:secret@localhost/runtime",
+        "rt_s_workspace_app_local",
     )
     assert "search_path" in url
     assert "rt_s_workspace_app_local" in url
@@ -69,7 +76,9 @@ def test_platform_metadata_contains_contract_tables() -> None:
 
 @pytest.mark.asyncio
 async def test_framework_state_engine_is_application_scoped() -> None:
-    from universal_runtime.adapters.postgres.database import create_framework_state_engine
+    from universal_runtime.adapters.postgres.database import (
+        create_framework_state_engine,
+    )
 
     engine = create_framework_state_engine(
         "postgresql+psycopg://runtime:runtime@localhost/runtime",
@@ -84,7 +93,10 @@ POSTGRES_URL = os.getenv("UR_POSTGRES_URL")
 pytestmark = pytest.mark.postgres
 
 
-@pytest.mark.skipif(POSTGRES_URL is None, reason="UR_POSTGRES_URL is not configured")
+@pytest.mark.skipif(
+    POSTGRES_URL is None,
+    reason="UR_POSTGRES_URL is not configured",
+)
 @pytest.mark.asyncio
 async def test_postgres_restart_state_and_idempotency() -> None:
     assert POSTGRES_URL is not None
@@ -92,11 +104,24 @@ async def test_postgres_restart_state_and_idempotency() -> None:
     application_id = f"integration-{uuid4().hex}"
     environment = "test"
     try:
-        await migrate_platform(engine, application_id=application_id, environment=environment)
+        await migrate_platform(
+            engine,
+            application_id=application_id,
+            environment=environment,
+        )
         sessions = create_session_factory(engine)
         now = datetime.now(UTC)
         async with sessions.begin() as session:
-            session.add(ThreadRow(id="thread-1", status="idle", metadata_json={}))
+            session.add(
+                ThreadRow(
+                    id="thread-1",
+                    workspace_id="workspace",
+                    project_id="project",
+                    application_id=application_id,
+                    status="idle",
+                    metadata_json={},
+                )
+            )
             session.add(
                 RunRow(
                     id="run-1",
@@ -106,6 +131,8 @@ async def test_postgres_restart_state_and_idempotency() -> None:
                     revision_id="revision",
                     deployment_id="deployment",
                     assistant_id="assistant",
+                    assistant_version=1,
+                    graph_id="graph",
                     thread_id="thread-1",
                     attempt_id="attempt",
                     status="success",
@@ -140,9 +167,15 @@ async def test_postgres_restart_state_and_idempotency() -> None:
         engine = create_engine(POSTGRES_URL)
         sessions = create_session_factory(engine)
         async with sessions() as session:
-            run = (await session.execute(select(RunRow).where(RunRow.id == "run-1"))).scalar_one()
+            run = (
+                await session.execute(
+                    select(RunRow).where(RunRow.id == "run-1")
+                )
+            ).scalar_one()
             assert run.workspace_id == "workspace"
             assert run.attempt_id == "attempt"
+            assert run.graph_id == "graph"
+            assert run.assistant_version == 1
             assert run.result == {"ok": True}
             assert (
                 await session.execute(select(RuntimeEventBatchRow))
@@ -163,7 +196,10 @@ async def test_postgres_restart_state_and_idempotency() -> None:
         await engine.dispose()
 
 
-@pytest.mark.skipif(POSTGRES_URL is None, reason="UR_POSTGRES_URL is not configured")
+@pytest.mark.skipif(
+    POSTGRES_URL is None,
+    reason="UR_POSTGRES_URL is not configured",
+)
 @pytest.mark.asyncio
 async def test_postgres_migration_lock_serializes_concurrent_migrations() -> None:
     assert POSTGRES_URL is not None
@@ -175,30 +211,49 @@ async def test_postgres_migration_lock_serializes_concurrent_migrations() -> Non
     order: list[str] = []
 
     async def holder() -> None:
-        async with advisory_migration_lock(engine, "lock-app", "test", "platform"):
+        async with advisory_migration_lock(
+            engine,
+            "lock-app",
+            "test",
+            "platform",
+        ):
             order.append("holder-enter")
             await asyncio.sleep(0.15)
             order.append("holder-exit")
 
     async def waiter() -> None:
         await asyncio.sleep(0.02)
-        async with advisory_migration_lock(engine, "lock-app", "test", "platform"):
+        async with advisory_migration_lock(
+            engine,
+            "lock-app",
+            "test",
+            "platform",
+        ):
             order.append("waiter-enter")
 
     try:
         await asyncio.gather(holder(), waiter())
-        assert order == ["holder-enter", "holder-exit", "waiter-enter"]
+        assert order == [
+            "holder-enter",
+            "holder-exit",
+            "waiter-enter",
+        ]
     finally:
         await engine.dispose()
 
 
-@pytest.mark.skipif(POSTGRES_URL is None, reason="UR_POSTGRES_URL is not configured")
+@pytest.mark.skipif(
+    POSTGRES_URL is None,
+    reason="UR_POSTGRES_URL is not configured",
+)
 @pytest.mark.asyncio
 async def test_postgres_application_schema_isolation() -> None:
     assert POSTGRES_URL is not None
     from sqlalchemy import text
 
-    from universal_runtime.adapters.postgres.database import create_application_engine
+    from universal_runtime.adapters.postgres.database import (
+        create_application_engine,
+    )
 
     prefix = f"it{uuid4().hex[:12]}"
     schemas = SchemaNames(prefix=prefix)
@@ -220,24 +275,40 @@ async def test_postgres_application_schema_isolation() -> None:
     try:
         async with admin.begin() as connection:
             await connection.execute(
-                text(f'CREATE SCHEMA "{schemas.application("workspace", "one", "test")}"')
+                text(
+                    f'CREATE SCHEMA "{schemas.application("workspace", "one", "test")}"'
+                )
             )
             await connection.execute(
-                text(f'CREATE SCHEMA "{schemas.application("workspace", "two", "test")}"')
+                text(
+                    f'CREATE SCHEMA "{schemas.application("workspace", "two", "test")}"'
+                )
             )
         async with first.begin() as connection:
-            await connection.execute(text("CREATE TABLE scoped_values (value text NOT NULL)"))
-            await connection.execute(text("INSERT INTO scoped_values VALUES ('one')"))
+            await connection.execute(
+                text("CREATE TABLE scoped_values (value text NOT NULL)")
+            )
+            await connection.execute(
+                text("INSERT INTO scoped_values VALUES ('one')")
+            )
         async with second.begin() as connection:
-            await connection.execute(text("CREATE TABLE scoped_values (value text NOT NULL)"))
-            await connection.execute(text("INSERT INTO scoped_values VALUES ('two')"))
+            await connection.execute(
+                text("CREATE TABLE scoped_values (value text NOT NULL)")
+            )
+            await connection.execute(
+                text("INSERT INTO scoped_values VALUES ('two')")
+            )
         async with first.connect() as connection:
             assert (
-                await connection.execute(text("SELECT value FROM scoped_values"))
+                await connection.execute(
+                    text("SELECT value FROM scoped_values")
+                )
             ).scalar_one() == "one"
         async with second.connect() as connection:
             assert (
-                await connection.execute(text("SELECT value FROM scoped_values"))
+                await connection.execute(
+                    text("SELECT value FROM scoped_values")
+                )
             ).scalar_one() == "two"
     finally:
         await first.dispose()
@@ -256,17 +327,28 @@ async def test_postgres_application_schema_isolation() -> None:
         await admin.dispose()
 
 
-@pytest.mark.skipif(POSTGRES_URL is None, reason="UR_POSTGRES_URL is not configured")
+@pytest.mark.skipif(
+    POSTGRES_URL is None,
+    reason="UR_POSTGRES_URL is not configured",
+)
 @pytest.mark.asyncio
 async def test_postgres_langgraph_state_survives_provider_restart() -> None:
     assert POSTGRES_URL is not None
     from langgraph.graph import END, START, StateGraph
 
-    from universal_runtime.adapters.postgres.langgraph import managed_langgraph_persistence
+    from universal_runtime.adapters.postgres.langgraph import (
+        managed_langgraph_persistence,
+    )
 
-    migration_engine = create_engine(POSTGRES_URL, pool_size=2, max_overflow=0)
+    migration_engine = create_engine(
+        POSTGRES_URL,
+        pool_size=2,
+        max_overflow=0,
+    )
     application_id = f"langgraph-{uuid4().hex}"
-    config = {"configurable": {"thread_id": f"thread-{uuid4().hex}"}}
+    config = {
+        "configurable": {"thread_id": f"thread-{uuid4().hex}"}
+    }
 
     def increment(state: dict[str, int]) -> dict[str, int]:
         return {"count": state.get("count", 0) + 1}
@@ -284,11 +366,22 @@ async def test_postgres_langgraph_state_survives_provider_restart() -> None:
             builder.add_node("increment", increment)
             builder.add_edge(START, "increment")
             builder.add_edge("increment", END)
-            graph = builder.compile(checkpointer=persistence.checkpointer, store=persistence.store)
+            graph = builder.compile(
+                checkpointer=persistence.checkpointer,
+                store=persistence.store,
+            )
             result = await graph.ainvoke({"count": 0}, config)
             assert result["count"] == 1
             assert (await graph.aget_state(config)).values["count"] == 1
-            assert len([item async for item in graph.aget_state_history(config)]) >= 1
+            assert (
+                len(
+                    [
+                        item
+                        async for item in graph.aget_state_history(config)
+                    ]
+                )
+                >= 1
+            )
 
         async with managed_langgraph_persistence(
             POSTGRES_URL,
@@ -302,7 +395,10 @@ async def test_postgres_langgraph_state_survives_provider_restart() -> None:
             builder.add_node("increment", increment)
             builder.add_edge(START, "increment")
             builder.add_edge("increment", END)
-            graph = builder.compile(checkpointer=persistence.checkpointer, store=persistence.store)
+            graph = builder.compile(
+                checkpointer=persistence.checkpointer,
+                store=persistence.store,
+            )
             assert (await graph.aget_state(config)).values["count"] == 1
     finally:
         await migration_engine.dispose()

@@ -15,7 +15,7 @@ from universal_runtime.adapters.grpc.generated.runtime.v1 import (
     worker_pb2,
     worker_pb2_grpc,
 )
-from universal_runtime.domain.execution import ExecutionRequest
+from universal_runtime.domain.execution import ExecutionRequest, ExecutionTarget
 from universal_runtime.domain.identity import (
     ApplicationId,
     ApplicationScope,
@@ -60,6 +60,8 @@ class WorkerRegistration:
     deployment_id: str
     config_hash: str
     max_concurrency: int
+    graph_ids: tuple[str, ...]
+    grpc_target: str
     capabilities: worker_pb2.WorkerCapabilities
 
 
@@ -75,6 +77,10 @@ class BoundedWorker:
     def register(self, request: worker_pb2.RegisterWorkerRequest) -> WorkerRegistration:
         if request.max_concurrency != self.max_concurrency:
             raise ValueError("worker max concurrency does not match resolved policy")
+        if not request.graph_ids:
+            raise ValueError("worker registration requires at least one graph_id")
+        if not request.grpc_target:
+            raise ValueError("worker registration requires grpc_target")
         self.registration = WorkerRegistration(
             request.worker_id,
             request.application_id,
@@ -82,6 +88,8 @@ class BoundedWorker:
             request.deployment_id,
             request.config_hash,
             request.max_concurrency,
+            tuple(request.graph_ids),
+            request.grpc_target,
             request.capabilities,
         )
         return self.registration
@@ -183,18 +191,28 @@ class WorkerControlServicer(worker_pb2_grpc.WorkerControlServiceServicer):
 
 
 class ExecutionServicer(execution_pb2_grpc.ExecutionServiceServicer):
-    def __init__(self, worker: BoundedWorker, adapter: RuntimeAdapter | dict[str, RuntimeAdapter] | None = None) -> None:
+    def __init__(
+        self,
+        worker: BoundedWorker,
+        adapter: RuntimeAdapter | dict[str, RuntimeAdapter] | None = None,
+    ) -> None:
         self.worker, self.adapter = worker, adapter
 
-    def _adapter_for(self, assistant_id: str) -> RuntimeAdapter:
+    def _adapter_for(self, graph_id: str) -> RuntimeAdapter:
         if isinstance(self.adapter, dict):
             try:
-                return self.adapter[assistant_id]
+                return self.adapter[graph_id]
             except KeyError as exc:
-                raise RuntimeError(f"no adapter registered for assistant: {assistant_id}") from exc
+                raise RuntimeError(f"no adapter registered for graph: {graph_id}") from exc
         if self.adapter is None:
             raise RuntimeError("worker graph adapter is not configured")
         return self.adapter
+
+    @staticmethod
+    def _graph_id(request: execution_pb2.InvokeRequest) -> str:
+        # Compatibility fallback is intentionally transport-only. Domain requests
+        # always receive an explicit ExecutionTarget.
+        return request.target.graph_id or request.identity.assistant_id
 
     async def Invoke(
         self, request: execution_pb2.InvokeRequest, context: object
@@ -204,12 +222,24 @@ class ExecutionServicer(execution_pb2_grpc.ExecutionServiceServicer):
         self.worker.register_running(request.identity.run_id)
         telemetry = initialize(component="worker")
         configure_logging()
+        graph_id = self._graph_id(request)
         try:
-            with runtime_run_span(telemetry.tracer, {"runtime.run_id": request.identity.run_id, "runtime.assistant_id": request.identity.assistant_id}) as current_span:
+            with runtime_run_span(
+                telemetry.tracer,
+                {
+                    "runtime.run_id": request.identity.run_id,
+                    "runtime.assistant_id": request.identity.assistant_id,
+                    "runtime.graph_id": graph_id,
+                },
+            ) as current_span:
                 try:
-                    adapter = self._adapter_for(request.identity.assistant_id)
+                    adapter = self._adapter_for(graph_id)
                     output = await adapter.invoke(_request_from_proto(request))
-                    return execution_pb2.InvokeResponse(run_id=request.identity.run_id, status="accepted", output=python_to_value(output))
+                    return execution_pb2.InvokeResponse(
+                        run_id=request.identity.run_id,
+                        status="accepted",
+                        output=python_to_value(output),
+                    )
                 except Exception as exc:
                     record_failure(current_span, exc, error_code="RUNTIME_EXECUTION_FAILED")
                     raise
@@ -224,7 +254,8 @@ class ExecutionServicer(execution_pb2_grpc.ExecutionServiceServicer):
         await self.worker.acquire()
         self.worker.register_running(request.invocation.identity.run_id)
         try:
-            adapter = self._adapter_for(request.invocation.identity.assistant_id)
+            graph_id = self._graph_id(request.invocation)
+            adapter = self._adapter_for(graph_id)
             invocation = _request_from_proto(request.invocation)
             sequence = 0
             async for draft in adapter.stream(invocation):
@@ -264,8 +295,10 @@ def _request_from_proto(request: execution_pb2.InvokeRequest) -> ExecutionReques
         AttemptId.parse(raw.attempt_id),
         ThreadId.parse(raw.thread_id) if raw.thread_id else None,
     )
+    graph_id = request.target.graph_id or raw.assistant_id
     return ExecutionRequest(
         identity=identity,
+        target=ExecutionTarget(graph_id, request.target.assistant_version or 1),
         input=value_to_python(request.input),
         command=value_to_python(request.command),
         config={key: value_to_python(value) for key, value in request.config.fields.items()},
@@ -273,4 +306,5 @@ def _request_from_proto(request: execution_pb2.InvokeRequest) -> ExecutionReques
         metadata={key: value_to_python(value) for key, value in request.metadata.fields.items()},
         stream_modes=tuple(request.stream_modes or ("values",)),
         stream_subgraphs=request.stream_subgraphs,
+        timeout_seconds=request.timeout_seconds or 1800,
     )

@@ -16,6 +16,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    restart: unless-stopped
 
   kafka:
     image: confluentinc/cp-kafka:7.6.1@sha256:620734d9fc0bb1f9886932e5baf33806074469f40e3fe246a3fdbb59309535fa
@@ -41,6 +42,7 @@ services:
       interval: 5s
       timeout: 15s
       retries: 20
+    restart: unless-stopped
 
   kafka-init:
     image: confluentinc/cp-kafka:7.6.1@sha256:620734d9fc0bb1f9886932e5baf33806074469f40e3fe246a3fdbb59309535fa
@@ -65,11 +67,17 @@ services:
     pull_policy: never
     environment:
       UR_MODE: migrate
-      UR_DATABASE_URL: postgresql+psycopg://runtime:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/runtime
+      UR_MIGRATION_DATABASE_URL: postgresql+psycopg://runtime:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/runtime
     depends_on:
       postgres:
         condition: service_healthy
-    command: ["--config", "/opt/universal-runtime/runtime.yaml", "--application-id", "platform", "--environment", "local"]
+    command:
+      - --config
+      - /opt/universal-runtime/runtime.yaml
+      - --application-id
+      - platform
+      - --environment
+      - ${UR_KAFKA_ENVIRONMENT:-local}
     restart: "no"
 
   gateway-1: &gateway
@@ -79,104 +87,163 @@ services:
       context: ../..
       dockerfile: container/Dockerfile
       pull: false
-    environment: &runtime-env
+    environment: &platform-env
       UR_MODE: gateway
       UR_PROFILE: production
       UR_INSTANCE_ID: gateway-1
       UR_GATEWAY_HOST: 0.0.0.0
       UR_GATEWAY_PORT: 8080
       UR_DATABASE_URL: postgresql+psycopg://runtime:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/runtime
+      UR_PLATFORM_DATABASE_URL: postgresql+psycopg://runtime:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/runtime
       UR_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       UR_TOPIC_PREFIX: ${UR_TOPIC_PREFIX:-rt}
       UR_KAFKA_ENVIRONMENT: ${UR_KAFKA_ENVIRONMENT:-local}
       UR_CONTRACT_SCHEMA_PATH: /opt/universal-runtime/contracts/config/runtime-application.schema.json
-      UR_APPLICATION_ID: phase1_agent
-      UR_APPLICATION_ENTRYPOINTS: phase1_agent.graph:build_graph,phase1_agent.deep_agent:build_deep_agent
-      UR_APPLICATION_NAME: phase1-agent
-      PYTHONPATH: /opt/universal-runtime:/opt/universal-runtime/applications/phase1-agent
+      UR_WORKSPACE_ID: ${UR_WORKSPACE_ID:-default}
+      UR_PROJECT_ID: ${UR_PROJECT_ID:-default}
     depends_on:
       postgres:
         condition: service_healthy
       kafka:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "/usr/local/bin/runtime-healthcheck.py"]
       interval: 5s
       timeout: 3s
       retries: 20
+    restart: unless-stopped
 
   gateway-2:
     <<: *gateway
     environment:
-      <<: *runtime-env
+      <<: *platform-env
       UR_INSTANCE_ID: gateway-2
 
-  all: &all
+  standalone:
     <<: *gateway
     profiles: ["compact"]
     ports:
       - "${UR_PUBLIC_PORT:-8080}:8080"
     environment:
-      <<: *runtime-env
-      UR_MODE: all
-      UR_INSTANCE_ID: all-1
-      UR_WORKER_TARGETS: 127.0.0.1:9090
+      <<: *platform-env
+      UR_MODE: standalone
+      UR_INSTANCE_ID: standalone-1
+      UR_APPLICATION_ID: ${UR_APPLICATION_ID:-phase1_agent}
+      UR_APPLICATION_NAME: ${UR_APPLICATION_NAME:-phase1-agent}
+      UR_REVISION_ID: ${UR_REVISION_ID:-revision-1}
+      UR_DEPLOYMENT_ID: ${UR_DEPLOYMENT_ID:-phase1-agent-local}
+      UR_IMAGE_DIGEST: ${UR_IMAGE_DIGEST:-local:phase1-agent-revision-1}
+      UR_ACTIVATE_REVISION: "true"
+      UR_APPLICATION_ENTRYPOINTS: phase1_agent.graph:build_graph,phase1_agent.deep_agent:build_deep_agent
       UR_GATEWAY_REGISTER_URL: http://127.0.0.1:8080/internal/workers/register
       UR_WORKER_ADVERTISE_TARGET: 127.0.0.1:9090
+      PYTHONPATH: /opt/universal-runtime/applications/phase1-agent
+
+  outbox-relay-1: &outbox-relay
+    image: universal-runtime:local
+    pull_policy: never
+    environment:
+      <<: *platform-env
+      UR_MODE: outbox-relay
+      UR_INSTANCE_ID: outbox-relay-1
+      UR_OUTBOX_BATCH_SIZE: ${UR_OUTBOX_BATCH_SIZE:-100}
+      UR_OUTBOX_POLL_SECONDS: ${UR_OUTBOX_POLL_SECONDS:-0.1}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  outbox-relay-2:
+    <<: *outbox-relay
+    environment:
+      <<: *platform-env
+      UR_MODE: outbox-relay
+      UR_INSTANCE_ID: outbox-relay-2
+      UR_OUTBOX_BATCH_SIZE: ${UR_OUTBOX_BATCH_SIZE:-100}
+      UR_OUTBOX_POLL_SECONDS: ${UR_OUTBOX_POLL_SECONDS:-0.1}
 
   dispatcher-1: &dispatcher
     image: universal-runtime:local
     pull_policy: never
     environment:
-      <<: *runtime-env
+      <<: *platform-env
       UR_MODE: dispatcher
       UR_INSTANCE_ID: dispatcher-1
-      UR_WORKER_TARGETS: worker-1:9090,worker-2:9090
+      UR_DISPATCH_MAX_ATTEMPTS: ${UR_DISPATCH_MAX_ATTEMPTS:-5}
+      UR_WORKER_LEASE_GRACE_SECONDS: ${UR_WORKER_LEASE_GRACE_SECONDS:-60}
     depends_on:
       postgres:
         condition: service_healthy
       kafka:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
 
   dispatcher-2:
     <<: *dispatcher
     environment:
-      <<: *runtime-env
+      <<: *platform-env
       UR_MODE: dispatcher
       UR_INSTANCE_ID: dispatcher-2
-      UR_WORKER_TARGETS: worker-1:9090,worker-2:9090
+      UR_DISPATCH_MAX_ATTEMPTS: ${UR_DISPATCH_MAX_ATTEMPTS:-5}
+      UR_WORKER_LEASE_GRACE_SECONDS: ${UR_WORKER_LEASE_GRACE_SECONDS:-60}
 
   worker-1: &worker
     image: universal-runtime:local
     pull_policy: never
-    environment:
-      <<: *runtime-env
+    environment: &application-env
+      <<: *platform-env
       UR_MODE: worker
       UR_INSTANCE_ID: worker-1
       UR_GRPC_HOST: 0.0.0.0
       UR_GRPC_PORT: 9090
       UR_WORKER_MAX_CONCURRENCY: ${UR_WORKER_MAX_CONCURRENCY:-8}
+      UR_WORKER_HEARTBEAT_SECONDS: ${UR_WORKER_HEARTBEAT_SECONDS:-10}
+      UR_APPLICATION_ID: ${UR_APPLICATION_ID:-phase1_agent}
+      UR_APPLICATION_NAME: ${UR_APPLICATION_NAME:-phase1-agent}
+      UR_REVISION_ID: ${UR_REVISION_ID:-revision-1}
+      UR_DEPLOYMENT_ID: ${UR_DEPLOYMENT_ID:-phase1-agent-local}
+      UR_IMAGE_DIGEST: ${UR_IMAGE_DIGEST:-local:phase1-agent-revision-1}
+      UR_ACTIVATE_REVISION: "true"
       UR_GATEWAY_REGISTER_URL: http://gateway-1:8080/internal/workers/register
       UR_WORKER_ADVERTISE_TARGET: worker-1:9090
+      UR_APPLICATION_ENTRYPOINTS: phase1_agent.graph:build_graph,phase1_agent.deep_agent:build_deep_agent
+      PYTHONPATH: /opt/universal-runtime/applications/phase1-agent
     depends_on:
-      postgres:
+      gateway-1:
         condition: service_healthy
-      kafka:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
 
   worker-2:
     <<: *worker
     environment:
-      <<: *runtime-env
-      UR_MODE: worker
+      <<: *application-env
       UR_INSTANCE_ID: worker-2
+      UR_GATEWAY_REGISTER_URL: http://gateway-2:8080/internal/workers/register
       UR_WORKER_ADVERTISE_TARGET: worker-2:9090
 
   projector:
     image: universal-runtime:local
     pull_policy: never
     environment:
-      <<: *runtime-env
+      <<: *platform-env
       UR_MODE: projector
       UR_INSTANCE_ID: projector-1
     depends_on:
@@ -184,6 +251,11 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
 
   haproxy:
     image: haproxy:3.0
@@ -197,6 +269,7 @@ services:
         condition: service_healthy
       gateway-2:
         condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   postgres-data:

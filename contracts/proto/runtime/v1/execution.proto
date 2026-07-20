@@ -34,6 +34,11 @@ message ExecutionIdentity {
   string attempt_id = 9;
 }
 
+message ExecutionTarget {
+  string graph_id = 1;
+  int32 assistant_version = 2;
+}
+
 message InvokeRequest {
   ExecutionIdentity identity = 1;
   google.protobuf.Value input = 2;
@@ -45,6 +50,7 @@ message InvokeRequest {
   bool stream_subgraphs = 8;
   QueuePriority priority = 9;
   int32 timeout_seconds = 10;
+  ExecutionTarget target = 11;
 }
 
 message StreamRequest {

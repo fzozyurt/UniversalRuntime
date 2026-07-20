@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from universal_runtime.adapters.a2a.errors import invalid_context_id, unsupported_part
+from universal_runtime.adapters.a2a.errors import (
+    invalid_context_id,
+    unsupported_part,
+)
 from universal_runtime.domain.execution import ExecutionRequest, QueuePriority
 from universal_runtime.domain.identity import (
     ApplicationScope,
@@ -20,9 +23,15 @@ def _part_value(part: Any) -> JsonValue:
     if field == "text":
         return str(part.text)
     if field == "data":
-        from google.protobuf.json_format import MessageToDict  # type: ignore[import-untyped]
+        from google.protobuf.json_format import MessageToDict
 
-        return cast(JsonValue, MessageToDict(part.data, preserving_proto_field_name=True))
+        return cast(
+            JsonValue,
+            MessageToDict(
+                part.data,
+                preserving_proto_field_name=True,
+            ),
+        )
     if field in {"raw", "url"}:
         raise unsupported_part(field)
     raise unsupported_part(field or "unknown")
@@ -51,7 +60,9 @@ def execution_request(
     run_id: RunId,
     scope: ApplicationScope,
 ) -> ExecutionRequest:
-    thread_id = context_thread_id(str(message.context_id) if message.context_id else None)
+    thread_id = context_thread_id(
+        str(message.context_id) if message.context_id else None
+    )
     identity = ExecutionIdentity(
         scope=scope,
         assistant_id=assistant_id,

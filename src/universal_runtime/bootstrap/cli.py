@@ -21,17 +21,32 @@ SCHEMA_PATH = PROJECT_ROOT / "contracts" / "config" / "runtime-application.schem
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="universal-runtime")
-    parser.add_argument("--version", action="version", version="universal-runtime 0.1.0")
+    parser.add_argument(
+        "--version",
+        action="version",
+        version="universal-runtime 0.1.0",
+    )
     commands = parser.add_subparsers(dest="command")
     commands.add_parser("info", help="print runtime bootstrap information")
     commands.add_parser("validate", help="validate UR_CONFIG_PATH")
-    commands.add_parser("standalone", help="create and shut down the local runtime composition")
-    inspect = commands.add_parser("inspect", help="discover an application HTTP surface")
+    commands.add_parser(
+        "standalone",
+        help="start application-hosted Gateway, Dispatcher and Worker composition",
+    )
+    commands.add_parser(
+        "local-smoke",
+        help="create and shut down the in-memory composition",
+    )
+    inspect = commands.add_parser(
+        "inspect",
+        help="discover an application HTTP surface",
+    )
     inspect.add_argument("path", type=Path)
     inspect.add_argument("--entrypoint")
     inspect.add_argument("--isolated-import", action="store_true")
     graph_inspect = commands.add_parser(
-        "inspect-graph", help="inspect an application graph entrypoint"
+        "inspect-graph",
+        help="inspect an application graph entrypoint",
     )
     graph_inspect.add_argument("--entrypoint", required=True)
     migrate = commands.add_parser("migrate", help="run application migrations")
@@ -43,11 +58,15 @@ def _parser() -> argparse.ArgumentParser:
     api.add_argument("--root-path", default="")
     api.add_argument("--host", default="127.0.0.1")
     api.add_argument("--port", type=int, default=8000)
-    commands.add_parser("worker", help="start the runtime worker composition")
-    commands.add_parser("gateway", help="start the Gateway HTTP process")
-    commands.add_parser("dispatcher", help="start the dispatcher process")
+    commands.add_parser("worker", help="start one application deployment worker")
+    commands.add_parser("gateway", help="start the shared Gateway HTTP process")
+    commands.add_parser("dispatcher", help="start the shared dispatcher process")
+    commands.add_parser("outbox-relay", help="relay committed run commands to Kafka")
     commands.add_parser("projector", help="start the event projector process")
-    validate = commands.add_parser("validate-config", help="validate a runtime YAML file")
+    validate = commands.add_parser(
+        "validate-config",
+        help="validate a runtime YAML file",
+    )
     validate.add_argument("path", type=Path)
     return parser
 
@@ -83,7 +102,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"config: missing ({config_path})")
             return 1
         return _validate_config(config_path)
-    if args.command == "standalone":
+    if args.command == "local-smoke":
         import asyncio
 
         async def run() -> None:
@@ -91,12 +110,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             await runtime.shutdown()
 
         asyncio.run(run())
-        print(json.dumps({"version": "0.1.0", "profile": "standalone"}))
+        print(json.dumps({"version": "0.1.0", "profile": "local-smoke"}))
         return 0
     if args.command == "inspect":
         try:
             asgi_descriptor = detect_asgi_application(
-                args.path, explicit_entrypoint=args.entrypoint, isolated_import=args.isolated_import
+                args.path,
+                explicit_entrypoint=args.entrypoint,
+                isolated_import=args.isolated_import,
             )
         except Exception as exc:
             print(str(exc))
@@ -111,7 +132,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         module_name, attribute = args.entrypoint.split(":", 1)
         target = getattr(import_module(module_name), attribute)
         graph_descriptor = detect_graph(target, entrypoint=args.entrypoint)
-        print(json.dumps(asdict(graph_descriptor), separators=(",", ":"), default=str))
+        print(
+            json.dumps(
+                asdict(graph_descriptor),
+                separators=(",", ":"),
+                default=str,
+            )
+        )
         return 0
     if args.command == "api":
         import uvicorn
@@ -124,14 +151,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             port=args.port,
         )
         return 0
-    if args.command in {"all", "gateway", "dispatcher", "projector", "worker"}:
+    service_commands = {
+        "standalone",
+        "gateway",
+        "dispatcher",
+        "outbox-relay",
+        "projector",
+        "worker",
+    }
+    if args.command in service_commands:
         service_main: Any
-        if args.command == "all":
-            from universal_runtime.services.all.main import main as service_main
+        if args.command == "standalone":
+            from universal_runtime.services.standalone.main import main as service_main
         elif args.command == "gateway":
             from universal_runtime.services.gateway.main import main as service_main
         elif args.command == "dispatcher":
             from universal_runtime.services.dispatcher.main import main as service_main
+        elif args.command == "outbox-relay":
+            from universal_runtime.services.outbox_relay.main import main as service_main
         elif args.command == "projector":
             from universal_runtime.services.event_projector.main import main as service_main
         else:
@@ -143,9 +180,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         from universal_runtime.adapters.postgres.database import create_engine
         from universal_runtime.adapters.postgres.migration import migrate_platform
 
-        database_url = os.environ.get("UR_DATABASE_URL")
+        database_url = os.environ.get("UR_MIGRATION_DATABASE_URL") or os.environ.get(
+            "UR_DATABASE_URL"
+        )
         if not database_url:
-            print("UR_DATABASE_URL is required for migrations")
+            print("UR_MIGRATION_DATABASE_URL or UR_DATABASE_URL is required for migrations")
             return 2
 
         async def run_migration() -> None:

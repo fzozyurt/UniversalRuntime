@@ -148,7 +148,7 @@ def create_app(
                         message="request validation failed",
                         retryable=False,
                         request_id=request.state.request_id,
-                details={"errors": cast(JsonObject, jsonable_encoder(exc.errors()))},
+                        details={"errors": cast(JsonObject, jsonable_encoder(exc.errors()))},
                     )
                 ).model_dump(mode="json"),
             )
@@ -268,7 +268,9 @@ def create_app(
         except json.JSONDecodeError as exc:
             raise RuntimeFailure(ErrorCode.INVALID_EXECUTION_INPUT, "invalid JSON body") from exc
         if not isinstance(decoded, dict):
-            raise RuntimeFailure(ErrorCode.INVALID_EXECUTION_INPUT, "versions body must be an object")
+            raise RuntimeFailure(
+                ErrorCode.INVALID_EXECUTION_INPUT, "versions body must be an object"
+            )
         request_payload = cast(JsonObject, decoded)
         limit = max(0, min(int(request_payload.get("limit", 10)), 1000))
         offset = max(0, int(request_payload.get("offset", 0)))
@@ -276,7 +278,9 @@ def create_app(
         return [_assistant_payload(item) for item in versions[offset : offset + limit]]
 
     @app.post("/assistants/{assistant_id}/latest")
-    async def set_latest_assistant(assistant_id: str, payload: JsonObject = Body(...)) -> dict[str, Any]:
+    async def set_latest_assistant(
+        assistant_id: str, payload: JsonObject = Body(...)
+    ) -> dict[str, Any]:
         version = int(payload.get("version", 0))
         if version < 1:
             raise RuntimeFailure(ErrorCode.INVALID_EXECUTION_INPUT, "version must be positive")
@@ -307,7 +311,9 @@ def create_app(
         adapter = _runtime_adapter(state)
         get_graph = getattr(adapter, "get_graph", None)
         if get_graph is None:
-            raise RuntimeFailure(ErrorCode.CAPABILITY_NOT_SUPPORTED, "graph inspection is not supported")
+            raise RuntimeFailure(
+                ErrorCode.CAPABILITY_NOT_SUPPORTED, "graph inspection is not supported"
+            )
         return await get_graph(xray=xray)
 
     @app.get("/assistants/{assistant_id}/subgraphs")
@@ -316,7 +322,9 @@ def create_app(
         adapter = _runtime_adapter(state)
         get_subgraphs = getattr(adapter, "get_subgraphs", None)
         if get_subgraphs is None:
-            raise RuntimeFailure(ErrorCode.CAPABILITY_NOT_SUPPORTED, "subgraph inspection is not supported")
+            raise RuntimeFailure(
+                ErrorCode.CAPABILITY_NOT_SUPPORTED, "subgraph inspection is not supported"
+            )
         return await get_subgraphs(xray=xray)
 
     @app.get("/assistants/{assistant_id}")
@@ -416,7 +424,9 @@ def create_app(
         return await state.threads.count(metadata=metadata, status=status)
 
     @app.patch("/threads/{thread_id}")
-    async def update_thread(thread_id: str, request: Request, payload: JsonObject = Body(...)) -> dict[str, Any] | None:
+    async def update_thread(
+        thread_id: str, request: Request, payload: JsonObject = Body(...)
+    ) -> dict[str, Any] | None:
         thread = await state.threads.get(thread_id)
         metadata = payload.get("metadata")
         if not isinstance(metadata, dict):
@@ -424,14 +434,18 @@ def create_app(
         merged = dict(thread.metadata)
         merged.update(metadata)
         updated = await state.threads.update(
-            type(thread)(thread.thread_id, thread.status, merged, thread.created_at, datetime.now(UTC))
+            type(thread)(
+                thread.thread_id, thread.status, merged, thread.created_at, datetime.now(UTC)
+            )
         )
         if request.headers.get("prefer") == "return=minimal":
             return None
         return _thread_payload(updated)
 
     @app.put("/threads/{thread_id}")
-    async def replace_thread(thread_id: str, request: Request, payload: JsonObject = Body(...)) -> dict[str, Any] | None:
+    async def replace_thread(
+        thread_id: str, request: Request, payload: JsonObject = Body(...)
+    ) -> dict[str, Any] | None:
         return await update_thread(thread_id, request, payload)
 
     @app.delete("/threads/{thread_id}", status_code=204)
@@ -474,7 +488,9 @@ def create_app(
         return _compat_state(result)
 
     @app.post("/threads/{thread_id}/state/checkpoint")
-    async def update_thread_state_checkpoint(thread_id: str, payload: JsonObject = Body(...)) -> Any:
+    async def update_thread_state_checkpoint(
+        thread_id: str, payload: JsonObject = Body(...)
+    ) -> Any:
         return await update_thread_state(thread_id, payload)
 
     @app.get("/threads/{thread_id}/history")
@@ -606,7 +622,9 @@ def create_app(
             raise RuntimeFailure(ErrorCode.RESOURCE_NOT_FOUND, "run does not belong to thread")
         deleter = getattr(state.runs, "delete", None)
         if deleter is None:
-            raise RuntimeFailure(ErrorCode.CAPABILITY_NOT_SUPPORTED, "run deletion is not supported")
+            raise RuntimeFailure(
+                ErrorCode.CAPABILITY_NOT_SUPPORTED, "run deletion is not supported"
+            )
         await deleter(run_id)
 
     @app.get("/threads/{thread_id}/runs/{run_id}/join")
@@ -683,6 +701,7 @@ async def _auto_register_application(state: LocalRuntime, app: FastAPI) -> None:
         except RuntimeFailure as exc:
             if exc.code is not ErrorCode.INVALID_EXECUTION_INPUT:
                 raise
+
 
 async def _start_run(state: LocalRuntime, payload: RunCreate, thread_id: str | None) -> Any:
     assistant = await state.assistants.get(payload.assistant_id)
@@ -765,9 +784,7 @@ def _compat_state(state: Any) -> JsonObject:
             "checkpoint": _checkpoint_from_config(getattr(state, "config", {})),
             "metadata": getattr(state, "metadata", {}),
             "created_at": getattr(state, "created_at", None),
-            "parent_checkpoint": _checkpoint_from_config(
-                getattr(state, "parent_config", None)
-            ),
+            "parent_checkpoint": _checkpoint_from_config(getattr(state, "parent_config", None)),
             "tasks": list(getattr(state, "tasks", ())),
             "interrupts": list(getattr(state, "interrupts", ())),
         }

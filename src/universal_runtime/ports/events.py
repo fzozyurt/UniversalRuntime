@@ -13,14 +13,29 @@ class EventJournal(Protocol):
 
 class EventReplay(Protocol):
     async def replay(
-        self, run_id: RunId, *, after_sequence: int = -1
+        self,
+        run_id: RunId,
+        *,
+        after_sequence: int = -1,
     ) -> tuple[RuntimeEvent, ...]: ...
 
 
 class EventSubscription(Protocol):
     def subscribe(
-        self, run_id: RunId, *, after_sequence: int = -1
+        self,
+        run_id: RunId,
+        *,
+        after_sequence: int = -1,
     ) -> AsyncIterator[RuntimeEvent]: ...
+
+
+class RuntimeEventStore(
+    EventJournal,
+    EventReplay,
+    EventSubscription,
+    Protocol,
+):
+    """Combined event persistence/replay contract used by composition containers."""
 
 
 class IntegrationEventPublisher(Protocol):

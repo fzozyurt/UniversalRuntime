@@ -7,9 +7,11 @@ from universal_runtime.domain.execution.requests import (
     RunCommandReceipt,
 )
 from universal_runtime.domain.execution.statuses import RunStatus, ThreadStatus
+from universal_runtime.domain.execution.target import ExecutionTarget
 
 __all__ = [
     "ExecutionRequest",
+    "ExecutionTarget",
     "QueuePriority",
     "Run",
     "RunCommand",
