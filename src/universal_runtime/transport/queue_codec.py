@@ -39,7 +39,12 @@ def _object(value: JsonValue, field: str) -> JsonObject:
     return value
 
 
-def _integer(value: JsonValue, field: str, *, default: int | None = None) -> int:
+def _integer(
+    value: JsonValue,
+    field: str,
+    *,
+    default: int | None = None,
+) -> int:
     if value is None and default is not None:
         return default
     if isinstance(value, bool) or not isinstance(value, int):
@@ -47,7 +52,12 @@ def _integer(value: JsonValue, field: str, *, default: int | None = None) -> int
     return value
 
 
-def _string(value: JsonValue, field: str, *, default: str | None = None) -> str:
+def _string(
+    value: JsonValue,
+    field: str,
+    *,
+    default: str | None = None,
+) -> str:
     if value is None and default is not None:
         return default
     if not isinstance(value, str) or not value:
@@ -66,12 +76,22 @@ def _optional_string(value: JsonValue, field: str) -> str | None:
 def _string_tuple(value: JsonValue, field: str) -> tuple[str, ...]:
     if value is None:
         return ("values",)
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+    if not isinstance(value, list):
         raise _invalid(field, "an array of strings")
-    return tuple(value)
+    result: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise _invalid(field, "an array of strings")
+        result.append(item)
+    return tuple(result)
 
 
-def _boolean(value: JsonValue, field: str, *, default: bool = False) -> bool:
+def _boolean(
+    value: JsonValue,
+    field: str,
+    *,
+    default: bool = False,
+) -> bool:
     if value is None:
         return default
     if not isinstance(value, bool):
@@ -79,7 +99,12 @@ def _boolean(value: JsonValue, field: str, *, default: bool = False) -> bool:
     return value
 
 
-def _priority(value: JsonValue, field: str, *, default: QueuePriority) -> QueuePriority:
+def _priority(
+    value: JsonValue,
+    field: str,
+    *,
+    default: QueuePriority,
+) -> QueuePriority:
     raw = _integer(value, field, default=int(default))
     try:
         return QueuePriority(raw)
@@ -130,22 +155,60 @@ def run_command_from_document(document: JsonObject) -> RunCommand:
     raw_identity = _object(document.get("identity"), "identity")
     identity = ExecutionIdentity(
         ApplicationScope(
-            WorkspaceId.parse(_string(raw_identity.get("workspace_id"), "identity.workspace_id")),
-            ProjectId.parse(_string(raw_identity.get("project_id"), "identity.project_id")),
-            ApplicationId.parse(
-                _string(raw_identity.get("application_id"), "identity.application_id")
+            WorkspaceId.parse(
+                _string(
+                    raw_identity.get("workspace_id"),
+                    "identity.workspace_id",
+                )
             ),
-            RevisionId.parse(_string(raw_identity.get("revision_id"), "identity.revision_id")),
+            ProjectId.parse(
+                _string(
+                    raw_identity.get("project_id"),
+                    "identity.project_id",
+                )
+            ),
+            ApplicationId.parse(
+                _string(
+                    raw_identity.get("application_id"),
+                    "identity.application_id",
+                )
+            ),
+            RevisionId.parse(
+                _string(
+                    raw_identity.get("revision_id"),
+                    "identity.revision_id",
+                )
+            ),
             DeploymentId.parse(
-                _string(raw_identity.get("deployment_id"), "identity.deployment_id")
+                _string(
+                    raw_identity.get("deployment_id"),
+                    "identity.deployment_id",
+                )
             ),
         ),
-        AssistantId.parse(_string(raw_identity.get("assistant_id"), "identity.assistant_id")),
-        RunId.parse(_string(raw_identity.get("run_id"), "identity.run_id")),
-        AttemptId.parse(_string(raw_identity.get("attempt_id"), "identity.attempt_id")),
+        AssistantId.parse(
+            _string(
+                raw_identity.get("assistant_id"),
+                "identity.assistant_id",
+            )
+        ),
+        RunId.parse(
+            _string(raw_identity.get("run_id"), "identity.run_id")
+        ),
+        AttemptId.parse(
+            _string(
+                raw_identity.get("attempt_id"),
+                "identity.attempt_id",
+            )
+        ),
         (
             ThreadId.parse(thread_id)
-            if (thread_id := _optional_string(raw_identity.get("thread_id"), "identity.thread_id"))
+            if (
+                thread_id := _optional_string(
+                    raw_identity.get("thread_id"),
+                    "identity.thread_id",
+                )
+            )
             else None
         ),
     )
@@ -169,8 +232,14 @@ def run_command_from_document(document: JsonObject) -> RunCommand:
         command=raw_request.get("command"),
         config=_object(raw_request.get("config") or {}, "request.config"),
         context=_object(raw_request.get("context") or {}, "request.context"),
-        metadata=_object(raw_request.get("metadata") or {}, "request.metadata"),
-        stream_modes=_string_tuple(raw_request.get("stream_modes"), "request.stream_modes"),
+        metadata=_object(
+            raw_request.get("metadata") or {},
+            "request.metadata",
+        ),
+        stream_modes=_string_tuple(
+            raw_request.get("stream_modes"),
+            "request.stream_modes",
+        ),
         stream_subgraphs=_boolean(
             raw_request.get("stream_subgraphs"),
             "request.stream_subgraphs",
@@ -197,10 +266,18 @@ def run_command_from_document(document: JsonObject) -> RunCommand:
             "request.checkpoint_id",
         ),
     )
-    available_at = _optional_string(document.get("available_at"), "available_at")
-    created_at = _optional_string(document.get("created_at"), "created_at")
+    available_at = _optional_string(
+        document.get("available_at"),
+        "available_at",
+    )
+    created_at = _optional_string(
+        document.get("created_at"),
+        "created_at",
+    )
     return RunCommand(
-        command_id=CommandId.parse(_string(document.get("command_id"), "command_id")),
+        command_id=CommandId.parse(
+            _string(document.get("command_id"), "command_id")
+        ),
         identity=identity,
         request=request,
         priority=_priority(
@@ -209,9 +286,13 @@ def run_command_from_document(document: JsonObject) -> RunCommand:
             default=request.priority,
         ),
         available_at=(
-            datetime.fromisoformat(available_at) if available_at is not None else datetime.now(UTC)
+            datetime.fromisoformat(available_at)
+            if available_at is not None
+            else datetime.now(UTC)
         ),
         created_at=(
-            datetime.fromisoformat(created_at) if created_at is not None else datetime.now(UTC)
+            datetime.fromisoformat(created_at)
+            if created_at is not None
+            else datetime.now(UTC)
         ),
     )
