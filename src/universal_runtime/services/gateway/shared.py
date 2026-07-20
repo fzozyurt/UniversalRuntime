@@ -13,26 +13,15 @@ from universal_runtime.services.gateway.worker_routes import create_worker_regis
 _WORKER_ROUTE_PATHS = {"/internal/workers", "/internal/workers/register"}
 
 
-def create_shared_gateway_app() -> FastAPI:
-    """Create the platform Gateway without importing application user code.
-
-    Application inspection, framework persistence and execution remain inside
-    Worker/standalone processes. The Gateway owns platform metadata, execution
-    records and HA worker registration only.
-    """
-    if os.environ.get("UR_APPLICATION_ENTRYPOINT") or os.environ.get(
-        "UR_APPLICATION_ENTRYPOINTS"
-    ):
-        raise RuntimeError(
-            "shared Gateway must not receive UR_APPLICATION_ENTRYPOINT(S); "
-            "configure entrypoints only on Worker or standalone deployments"
-        )
-    app = create_app()
+def attach_postgres_control_plane(app: FastAPI) -> FastAPI:
+    """Replace process-local worker routes with the HA PostgreSQL control plane."""
     database_url = os.environ.get("UR_PLATFORM_DATABASE_URL") or os.environ.get(
         "UR_DATABASE_URL"
     )
     if not database_url:
-        raise RuntimeError("shared Gateway requires UR_PLATFORM_DATABASE_URL or UR_DATABASE_URL")
+        raise RuntimeError(
+            "Gateway control plane requires UR_PLATFORM_DATABASE_URL or UR_DATABASE_URL"
+        )
     engine = create_engine(
         database_url,
         pool_size=int(os.environ.get("UR_GATEWAY_DB_POOL_SIZE", "10")),
@@ -59,3 +48,20 @@ def create_shared_gateway_app() -> FastAPI:
         await engine.dispose()
 
     return app
+
+
+def create_shared_gateway_app() -> FastAPI:
+    """Create the platform Gateway without importing application user code.
+
+    Application inspection, framework persistence and execution remain inside
+    Worker/standalone processes. The Gateway owns platform metadata, execution
+    records and HA worker registration only.
+    """
+    if os.environ.get("UR_APPLICATION_ENTRYPOINT") or os.environ.get(
+        "UR_APPLICATION_ENTRYPOINTS"
+    ):
+        raise RuntimeError(
+            "shared Gateway must not receive UR_APPLICATION_ENTRYPOINT(S); "
+            "configure entrypoints only on Worker or standalone deployments"
+        )
+    return attach_postgres_control_plane(create_app())
