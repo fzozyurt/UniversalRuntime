@@ -80,6 +80,13 @@ class Run:
     def mark_running(self, now: datetime) -> Run:
         return self._change(RunStatus.RUNNING, now)
 
+    def requeue(self, now: datetime) -> Run:
+        if self.status is RunStatus.PENDING:
+            return self
+        if self.status is not RunStatus.RUNNING:
+            raise ValueError(f"only a running run can be requeued, got {self.status}")
+        return self._change(RunStatus.PENDING, now)
+
     def mark_interrupted(self, now: datetime) -> Run:
         return self._change(RunStatus.INTERRUPTED, now, result=self.result, error=self.error)
 
