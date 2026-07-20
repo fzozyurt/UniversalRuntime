@@ -60,6 +60,7 @@ universal-runtime-dispatcher = "universal_runtime.services.dispatcher.main:main"
 universal-runtime-worker = "universal_runtime.services.worker.main:main"
 universal-runtime-projector = "universal_runtime.services.event_projector.main:main"
 universal-runtime-standalone = "universal_runtime.services.standalone.main:main"
+universal-runtime-outbox-relay = "universal_runtime.services.outbox_relay.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
