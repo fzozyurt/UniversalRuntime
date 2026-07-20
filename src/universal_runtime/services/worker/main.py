@@ -19,6 +19,13 @@ from universal_runtime.bootstrap.runtime_config import LauncherConfig
 _LOGGER = logging.getLogger(__name__)
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def create_server(adapter: object | None = None) -> WorkerServer:
     config = LauncherConfig.from_environment()
     return WorkerServer.create(
@@ -190,6 +197,7 @@ async def _publish_registration(
         "deployment_id": os.environ.get("UR_DEPLOYMENT_ID", "local"),
         "environment": os.environ.get("UR_KAFKA_ENVIRONMENT", "local"),
         "image_digest": os.environ.get("UR_IMAGE_DIGEST", f"local:{revision_id}"),
+        "activate_revision": _env_bool("UR_ACTIVATE_REVISION"),
         "graph_ids": sorted(adapters),
         "graphs": _graph_descriptors(adapters, graph_entrypoints),
         "manifests": manifests,
