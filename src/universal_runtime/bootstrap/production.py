@@ -17,6 +17,7 @@ from universal_runtime.adapters.postgres.repositories import (
     PostgresRunRepository,
     PostgresThreadRepository,
 )
+from universal_runtime.adapters.postgres.submission import PostgresRunSubmissionStore
 from universal_runtime.adapters.postgres.threads import (
     PostgresThreadApplicationBinder,
     SharedPostgresThreadRepository,
@@ -24,6 +25,7 @@ from universal_runtime.adapters.postgres.threads import (
 from universal_runtime.adapters.postgres.workers import PostgresWorkerRegistry
 from universal_runtime.application.managed_execution_service import ManagedExecutionService
 from universal_runtime.bootstrap.local import LocalRuntime
+from universal_runtime.domain.execution import QueuePriority
 from universal_runtime.domain.identity import (
     ApplicationId,
     ApplicationScope,
@@ -80,20 +82,29 @@ def create_production_runtime() -> LocalRuntime:
         plans = None
         thread_binder = None
 
+    topics = TopicNames.from_config(
+        prefix=os.environ.get("UR_TOPIC_PREFIX", "rt"),
+        environment=environment,
+    )
     runs = PostgresRunRepository(sessions)
     events = PostgresEventJournal(sessions)
     workers = PostgresWorkerRegistry(sessions)
     commands = AioKafkaRunCommandQueue(
         bootstrap_servers=os.environ.get("UR_KAFKA_BOOTSTRAP_SERVERS", "kafka:9092"),
-        topics=TopicNames.from_config(
-            prefix=os.environ.get("UR_TOPIC_PREFIX", "rt"),
-            environment=environment,
-        ),
+        topics=topics,
         group_id=(
             os.environ.get("UR_GATEWAY_COMMAND_GROUP_ID", "runtime.gateway")
             if shared_gateway
             else f"{scope.application_id}.standalone"
         ),
+    )
+    submission = PostgresRunSubmissionStore(
+        sessions,
+        topics={
+            QueuePriority.INTERACTIVE: topics.interactive,
+            QueuePriority.NORMAL: topics.normal,
+            QueuePriority.BATCH: topics.batch,
+        },
     )
     capacity = ExecutionCapacity(
         int(os.environ.get("UR_WORKER_MAX_CONCURRENCY", "8"))
@@ -107,6 +118,7 @@ def create_production_runtime() -> LocalRuntime:
                 os.environ.get("UR_CANCEL_RPC_TIMEOUT_SECONDS", "3")
             ),
         ),
+        submission=submission,
         threads=threads,
         runs=runs,
         commands=commands,
