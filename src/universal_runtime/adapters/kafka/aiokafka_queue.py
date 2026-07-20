@@ -134,6 +134,7 @@ class AioKafkaRunCommandQueue(RunCommandQueue):
         self._producer: AIOKafkaProducer | None = None
         self._consumer: AIOKafkaConsumer | None = None
         self._leases: dict[str, Any] = {}
+        self._delivery_counts: dict[tuple[str, int, int], int] = {}
         self._lease_seconds = 60
 
     async def _start(self, *, consumer: bool) -> None:
@@ -176,6 +177,10 @@ class AioKafkaRunCommandQueue(RunCommandQueue):
             ],
         )
 
+    @staticmethod
+    def _message_key(message: Any) -> tuple[str, int, int]:
+        return message.topic, int(message.partition), int(message.offset)
+
     async def receive(self, worker_id: WorkerId) -> RunCommandReceipt:
         del worker_id
         await self._start(consumer=True)
@@ -183,8 +188,15 @@ class AioKafkaRunCommandQueue(RunCommandQueue):
         message = await self._consumer.getone()
         command = _command(message.value)
         now = datetime.now(UTC)
+        message_key = self._message_key(message)
+        delivery_count = self._delivery_counts.get(message_key, 0) + 1
+        self._delivery_counts[message_key] = delivery_count
         receipt = RunCommandReceipt(
-            command, LeaseId.new(), 1, now, now + timedelta(seconds=self._lease_seconds)
+            command,
+            LeaseId.new(),
+            delivery_count,
+            now,
+            now + timedelta(seconds=self._lease_seconds),
         )
         self._leases[str(receipt.lease_id)] = message
         return receipt
@@ -193,6 +205,7 @@ class AioKafkaRunCommandQueue(RunCommandQueue):
         message = self._leases.pop(str(receipt.lease_id), None)
         if message is None or self._consumer is None:
             raise RuntimeFailure(ErrorCode.INVALID_EXECUTION_INPUT, "receipt is not active")
+        self._delivery_counts.pop(self._message_key(message), None)
         await self._consumer.commit(
             {TopicPartition(message.topic, message.partition): message.offset + 1}
         )
@@ -201,14 +214,20 @@ class AioKafkaRunCommandQueue(RunCommandQueue):
         message = self._leases.pop(str(receipt.lease_id), None)
         if message is None or self._consumer is None:
             raise RuntimeFailure(ErrorCode.INVALID_EXECUTION_INPUT, "receipt is not active")
-        if not retryable:
-            await self._consumer.commit(
-                {TopicPartition(message.topic, message.partition): message.offset + 1}
-            )
+        partition = TopicPartition(message.topic, message.partition)
+        if retryable:
+            # Reset the consumer position to the same record. The offset remains
+            # uncommitted, preserving at-least-once delivery after rebalance/restart.
+            self._consumer.seek(partition, message.offset)
+            return
+        self._delivery_counts.pop(self._message_key(message), None)
+        await self._consumer.commit({partition: message.offset + 1})
 
     async def close(self) -> None:
         consumer, producer = self._consumer, self._producer
         self._consumer = self._producer = None
+        self._leases.clear()
+        self._delivery_counts.clear()
         if consumer is not None:
             await consumer.stop()
         if producer is not None:
