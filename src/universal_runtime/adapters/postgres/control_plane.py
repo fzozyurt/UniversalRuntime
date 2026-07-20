@@ -249,22 +249,31 @@ class PostgresControlPlaneCatalog(ApplicationDeploymentCatalog, ExecutionPlanRes
                             graph_id=graph.graph_id,
                             version=1,
                             name=graph.graph_id,
-                            metadata={key: value for key, value in metadata.items() if key != "name"},
+                            metadata={
+                                key: value
+                                for key, value in metadata.items()
+                                if key != "name"
+                            },
                         )
                     )
         return tuple(assistants)
 
-    async def resolve(self, assistant_id: AssistantId) -> ResolvedExecutionPlan:
+    async def resolve(
+        self,
+        assistant_id: AssistantId,
+        *,
+        version: int | None = None,
+    ) -> ResolvedExecutionPlan:
         async with self._sessions() as session:
             row = (
                 await session.execute(
                     text(
-                        "SELECT a.application_id, a.graph_id, a.active_version, "
+                        "SELECT a.application_id, a.graph_id, av.version AS resolved_version, "
                         "av.config, av.context, av.metadata, app.workspace_id, app.project_id, "
                         "app.active_revision_id, d.id AS deployment_id "
                         "FROM rt_core.assistants a "
                         "JOIN rt_core.assistant_versions av ON av.assistant_id = a.id "
-                        "AND av.version = a.active_version "
+                        "AND av.version = COALESCE(:version, a.active_version) "
                         "JOIN rt_core.applications app ON app.id = a.application_id "
                         "JOIN rt_core.deployments d ON d.application_id = app.id "
                         "AND d.revision_id = app.active_revision_id "
@@ -275,19 +284,21 @@ class PostgresControlPlaneCatalog(ApplicationDeploymentCatalog, ExecutionPlanRes
                     {
                         "assistant_id": str(assistant_id),
                         "environment": self._environment,
+                        "version": version,
                     },
                 )
             ).mappings().first()
             if row is None:
+                suffix = f" version {version}" if version is not None else ""
                 raise RuntimeFailure(
                     ErrorCode.RESOURCE_NOT_FOUND,
-                    f"assistant execution plan not found: {assistant_id}",
+                    f"assistant execution plan not found: {assistant_id}{suffix}",
                 )
             metadata = dict(row["metadata"])
             assistant = Assistant(
                 assistant_id=assistant_id,
                 graph_id=str(row["graph_id"]),
-                version=int(row["active_version"]),
+                version=int(row["resolved_version"]),
                 name=metadata.pop("name", None),
                 config=dict(row["config"]),
                 context=dict(row["context"]),
