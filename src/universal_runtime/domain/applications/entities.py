@@ -40,6 +40,7 @@ class ApplicationDeploymentRegistration:
     image_digest: str
     graphs: tuple[GraphRegistration, ...]
     revision_metadata: JsonObject = field(default_factory=dict)
+    activate_revision: bool = False
 
     def __post_init__(self) -> None:
         if not self.application_name.strip():
