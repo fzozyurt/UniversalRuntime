@@ -6,6 +6,7 @@ from typing import Any, cast
 from universal_runtime.adapters.kafka import AioKafkaRunCommandQueue, TopicNames
 from universal_runtime.adapters.memory.capacity import ExecutionCapacity
 from universal_runtime.adapters.memory.registry import InMemoryAdapterRegistry
+from universal_runtime.adapters.postgres.assistants import PostgresGatewayAssistantRepository
 from universal_runtime.adapters.postgres.control_plane import PostgresControlPlaneCatalog
 from universal_runtime.adapters.postgres.database import create_engine, create_session_factory
 from universal_runtime.adapters.postgres.events import PostgresEventJournal
@@ -15,6 +16,11 @@ from universal_runtime.adapters.postgres.repositories import (
     PostgresRunRepository,
     PostgresThreadRepository,
 )
+from universal_runtime.adapters.postgres.threads import (
+    PostgresThreadApplicationBinder,
+    SharedPostgresThreadRepository,
+)
+from universal_runtime.application.bound_execution_service import ApplicationBoundExecutionService
 from universal_runtime.application.runtime_service import RuntimeExecutionService
 from universal_runtime.bootstrap.local import LocalRuntime
 from universal_runtime.domain.identity import (
@@ -50,11 +56,29 @@ def create_production_runtime() -> LocalRuntime:
     )
     sessions = create_session_factory(engine)
     scope = _application_scope()
-    application_id = str(scope.application_id)
     environment = os.environ.get("UR_KAFKA_ENVIRONMENT", "local")
-    assistants = PostgresAssistantRepository(sessions, application_id)
-    plans = PostgresControlPlaneCatalog(sessions, environment=environment)
-    threads = PostgresThreadRepository(sessions, scope)
+    shared_gateway = os.environ.get("UR_MODE", "gateway") == "gateway"
+
+    plans: PostgresControlPlaneCatalog | None
+    if shared_gateway:
+        assistants: Any = PostgresGatewayAssistantRepository(
+            sessions,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+        )
+        threads: Any = SharedPostgresThreadRepository(
+            sessions,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+        )
+        plans = PostgresControlPlaneCatalog(sessions, environment=environment)
+        thread_binder = PostgresThreadApplicationBinder(sessions)
+    else:
+        assistants = PostgresAssistantRepository(sessions, str(scope.application_id))
+        threads = PostgresThreadRepository(sessions, scope)
+        plans = None
+        thread_binder = None
+
     runs = PostgresRunRepository(sessions)
     events = PostgresEventJournal(sessions)
     commands = AioKafkaRunCommandQueue(
@@ -63,10 +87,36 @@ def create_production_runtime() -> LocalRuntime:
             prefix=os.environ.get("UR_TOPIC_PREFIX", "rt"),
             environment=environment,
         ),
-        group_id=f"{application_id}.gateway",
+        group_id=(
+            os.environ.get("UR_GATEWAY_COMMAND_GROUP_ID", "runtime.gateway")
+            if shared_gateway
+            else f"{scope.application_id}.standalone"
+        ),
     )
     capacity = ExecutionCapacity(int(os.environ.get("UR_WORKER_MAX_CONCURRENCY", "8")))
     adapters = InMemoryAdapterRegistry()
+    dependencies: dict[str, Any] = {
+        "threads": threads,
+        "runs": runs,
+        "commands": commands,
+        "journal": events,
+        "replay": events,
+        "subscription": events,
+        "assistants": assistants,
+        "plan_resolver": plans,
+        "execution_scope": scope,
+        "adapters": adapters,
+        "capacity": capacity,
+    }
+    execution: RuntimeExecutionService
+    if thread_binder is not None:
+        execution = ApplicationBoundExecutionService(
+            thread_binder=thread_binder,
+            **dependencies,
+        )
+    else:
+        execution = RuntimeExecutionService(**dependencies)
+
     return LocalRuntime(
         config=PostgresApplicationConfigRepository(sessions, environment),
         assistants=cast(Any, assistants),
@@ -77,18 +127,6 @@ def create_production_runtime() -> LocalRuntime:
         commands=commands,
         adapters=adapters,
         capacity=capacity,
-        execution=RuntimeExecutionService(
-            threads=threads,
-            runs=runs,
-            commands=commands,
-            journal=events,
-            replay=events,
-            subscription=events,
-            assistants=assistants,
-            plan_resolver=plans,
-            execution_scope=scope,
-            adapters=adapters,
-            capacity=capacity,
-        ),
+        execution=execution,
         execute_locally=False,
     )
