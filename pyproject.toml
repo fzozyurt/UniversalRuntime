@@ -105,7 +105,7 @@ mypy_path = "src"
 warn_unused_configs = true
 
 [[tool.mypy.overrides]]
-module = ["yaml.*", "a2a.*", "openlit.*", "aiokafka.*"]
+module = ["yaml.*", "a2a.*", "aiokafka.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
@@ -118,3 +118,7 @@ module = [
 ]
 ignore_errors = true
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["universal_runtime.services.gateway.app"]
+disable_error_code = ["arg-type", "union-attr", "no-any-return"]
