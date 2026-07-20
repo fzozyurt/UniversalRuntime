@@ -13,6 +13,7 @@ from universal_runtime.adapters.memory.repositories import (
     InMemoryRunRepository,
     InMemoryThreadRepository,
 )
+from universal_runtime.application.managed_execution_service import ManagedExecutionService
 from universal_runtime.application.runtime_service import RuntimeExecutionService
 
 
@@ -20,7 +21,7 @@ from universal_runtime.application.runtime_service import RuntimeExecutionServic
 class LocalRuntime:
     config: InMemoryApplicationConfigRepository
     assistants: InMemoryAssistantRepository
-    outbox: InMemoryOutboxRepository
+    outbox: InMemoryOutboxRepository | None
     threads: InMemoryThreadRepository
     runs: InMemoryRunRepository
     events: InMemoryEventJournal
@@ -45,7 +46,6 @@ class LocalRuntime:
 def create_local_runtime(*, max_concurrency: int = 8) -> LocalRuntime:
     config = InMemoryApplicationConfigRepository()
     assistants = InMemoryAssistantRepository()
-    outbox = InMemoryOutboxRepository()
     threads = InMemoryThreadRepository()
     runs = InMemoryRunRepository()
     events = InMemoryEventJournal()
@@ -55,21 +55,20 @@ def create_local_runtime(*, max_concurrency: int = 8) -> LocalRuntime:
     return LocalRuntime(
         config=config,
         assistants=assistants,
-        outbox=outbox,
+        outbox=None,
         threads=threads,
         runs=runs,
         events=events,
         commands=commands,
         adapters=adapters,
         capacity=capacity,
-        execution=RuntimeExecutionService(
+        execution=ManagedExecutionService(
             threads=threads,
             runs=runs,
             commands=commands,
             journal=events,
             replay=events,
             subscription=events,
-            outbox=outbox,
             assistants=assistants,
             adapters=adapters,
             capacity=capacity,
