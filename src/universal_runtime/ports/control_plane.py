@@ -18,4 +18,9 @@ class ApplicationDeploymentCatalog(Protocol):
 
 
 class ExecutionPlanResolver(Protocol):
-    async def resolve(self, assistant_id: AssistantId) -> ResolvedExecutionPlan: ...
+    async def resolve(
+        self,
+        assistant_id: AssistantId,
+        *,
+        version: int | None = None,
+    ) -> ResolvedExecutionPlan: ...
