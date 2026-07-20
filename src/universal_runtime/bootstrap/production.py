@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from typing import Any, cast
 
+from universal_runtime.adapters.grpc.cancellation import LeasedGrpcRunCancellation
 from universal_runtime.adapters.kafka import AioKafkaRunCommandQueue, TopicNames
 from universal_runtime.adapters.memory.capacity import ExecutionCapacity
 from universal_runtime.adapters.memory.registry import InMemoryAdapterRegistry
@@ -20,8 +21,8 @@ from universal_runtime.adapters.postgres.threads import (
     PostgresThreadApplicationBinder,
     SharedPostgresThreadRepository,
 )
-from universal_runtime.application.bound_execution_service import ApplicationBoundExecutionService
-from universal_runtime.application.runtime_service import RuntimeExecutionService
+from universal_runtime.adapters.postgres.workers import PostgresWorkerRegistry
+from universal_runtime.application.managed_execution_service import ManagedExecutionService
 from universal_runtime.bootstrap.local import LocalRuntime
 from universal_runtime.domain.identity import (
     ApplicationId,
@@ -81,6 +82,7 @@ def create_production_runtime() -> LocalRuntime:
 
     runs = PostgresRunRepository(sessions)
     events = PostgresEventJournal(sessions)
+    workers = PostgresWorkerRegistry(sessions)
     commands = AioKafkaRunCommandQueue(
         bootstrap_servers=os.environ.get("UR_KAFKA_BOOTSTRAP_SERVERS", "kafka:9092"),
         topics=TopicNames.from_config(
@@ -93,29 +95,30 @@ def create_production_runtime() -> LocalRuntime:
             else f"{scope.application_id}.standalone"
         ),
     )
-    capacity = ExecutionCapacity(int(os.environ.get("UR_WORKER_MAX_CONCURRENCY", "8")))
+    capacity = ExecutionCapacity(
+        int(os.environ.get("UR_WORKER_MAX_CONCURRENCY", "8"))
+    )
     adapters = InMemoryAdapterRegistry()
-    dependencies: dict[str, Any] = {
-        "threads": threads,
-        "runs": runs,
-        "commands": commands,
-        "journal": events,
-        "replay": events,
-        "subscription": events,
-        "assistants": assistants,
-        "plan_resolver": plans,
-        "execution_scope": scope,
-        "adapters": adapters,
-        "capacity": capacity,
-    }
-    execution: RuntimeExecutionService
-    if thread_binder is not None:
-        execution = ApplicationBoundExecutionService(
-            thread_binder=thread_binder,
-            **dependencies,
-        )
-    else:
-        execution = RuntimeExecutionService(**dependencies)
+    execution = ManagedExecutionService(
+        thread_binder=thread_binder,
+        cancellation=LeasedGrpcRunCancellation(
+            workers,
+            timeout_seconds=float(
+                os.environ.get("UR_CANCEL_RPC_TIMEOUT_SECONDS", "3")
+            ),
+        ),
+        threads=threads,
+        runs=runs,
+        commands=commands,
+        journal=events,
+        replay=events,
+        subscription=events,
+        assistants=assistants,
+        plan_resolver=plans,
+        execution_scope=scope,
+        adapters=adapters,
+        capacity=capacity,
+    )
 
     return LocalRuntime(
         config=PostgresApplicationConfigRepository(sessions, environment),
