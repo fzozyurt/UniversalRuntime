@@ -46,15 +46,22 @@ class AuditMixin:
 
 class ApplicationRow(AuditMixin, PlatformBase):
     __tablename__ = "applications"
-    __table_args__ = ({"schema": DEFAULT_SCHEMAS.core},)
+    __table_args__ = (
+        Index("ix_applications_workspace_project", "workspace_id", "project_id"),
+        {"schema": DEFAULT_SCHEMAS.core},
+    )
 
     id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(255), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     environment: Mapped[str] = mapped_column(String(63), nullable=False)
     active_revision_id: Mapped[str | None] = mapped_column(String(255))
 
 
 class ApplicationRevisionRow(AuditMixin, PlatformBase):
+    """Versioned Gateway-managed application configuration revision."""
+
     __tablename__ = "application_revisions"
     __table_args__ = (
         UniqueConstraint("application_id", "revision_number"),
@@ -70,9 +77,30 @@ class ApplicationRevisionRow(AuditMixin, PlatformBase):
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
 
 
+class ApplicationRuntimeRevisionRow(AuditMixin, PlatformBase):
+    """Immutable executable application image and graph-catalog revision."""
+
+    __tablename__ = "application_runtime_revisions"
+    __table_args__ = (
+        UniqueConstraint("application_id", "image_digest"),
+        Index("ix_application_runtime_revision_active", "application_id", "active"),
+        {"schema": DEFAULT_SCHEMAS.core},
+    )
+
+    id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    application_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    image_digest: Mapped[str] = mapped_column(String(255), nullable=False)
+    descriptor_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+
+
 class DeploymentRow(AuditMixin, PlatformBase):
     __tablename__ = "deployments"
-    __table_args__ = ({"schema": DEFAULT_SCHEMAS.core},)
+    __table_args__ = (
+        Index("ix_deployments_application_environment", "application_id", "environment"),
+        {"schema": DEFAULT_SCHEMAS.core},
+    )
 
     id: Mapped[str] = mapped_column(String(255), primary_key=True)
     application_id: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -97,6 +125,8 @@ class DeploymentConfigRevisionRow(AuditMixin, PlatformBase):
 
 
 class GraphRow(AuditMixin, PlatformBase):
+    """Active graph descriptor pointer for an application."""
+
     __tablename__ = "graphs"
     __table_args__ = (
         UniqueConstraint("application_id", "graph_id"),
@@ -109,6 +139,23 @@ class GraphRow(AuditMixin, PlatformBase):
     graph_id: Mapped[str] = mapped_column(String(255), nullable=False)
     entrypoint: Mapped[str] = mapped_column(String(1024), nullable=False)
     descriptor: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class GraphRevisionRow(AuditMixin, PlatformBase):
+    __tablename__ = "graph_revisions"
+    __table_args__ = (
+        UniqueConstraint("application_id", "revision_id", "graph_id"),
+        Index("ix_graph_revision_lookup", "application_id", "graph_id", "revision_id"),
+        {"schema": DEFAULT_SCHEMAS.core},
+    )
+
+    id: Mapped[str] = mapped_column(String(768), primary_key=True)
+    application_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    revision_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    graph_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    entrypoint: Mapped[str] = mapped_column(String(1024), nullable=False)
+    descriptor: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    descriptor_hash: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
 class AssistantRow(AuditMixin, PlatformBase):
@@ -144,13 +191,14 @@ class ThreadRow(AuditMixin, PlatformBase):
     __table_args__ = (
         Index("ix_threads_application_created", "application_id", "created_at"),
         Index("ix_threads_application_status", "application_id", "status"),
+        Index("ix_threads_workspace_project", "workspace_id", "project_id"),
         {"schema": DEFAULT_SCHEMAS.execution},
     )
 
     id: Mapped[str] = mapped_column(String(255), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(String(255), nullable=False)
     project_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    application_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    application_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, nullable=False)
 
@@ -176,7 +224,9 @@ class RunRow(AuditMixin, PlatformBase):
     deployment_id: Mapped[str] = mapped_column(String(255), nullable=False)
     assistant_id: Mapped[str] = mapped_column(String(255), nullable=False)
     assistant_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
-    graph_id: Mapped[str] = mapped_column(String(255), nullable=False, server_default=text("'default'"))
+    graph_id: Mapped[str] = mapped_column(
+        String(255), nullable=False, server_default=text("'default'")
+    )
     thread_id: Mapped[str | None] = mapped_column(String(255))
     attempt_id: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
