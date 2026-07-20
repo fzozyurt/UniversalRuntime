@@ -64,6 +64,12 @@ def _graphs(payload: JsonObject) -> tuple[GraphRegistration, ...]:
     )
 
 
+def _boolean(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def create_worker_registry_router(
     registry: WorkerRegistry,
     catalog: ApplicationDeploymentCatalog,
@@ -110,6 +116,7 @@ def create_worker_registry_router(
                     if isinstance(payload.get("revision_metadata"), dict)
                     else {},
                 ),
+                activate_revision=_boolean(payload.get("activate_revision", False)),
             )
             graph_ids = frozenset(graph.graph_id for graph in graphs)
             now = datetime.now(UTC)
