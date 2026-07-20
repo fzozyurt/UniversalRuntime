@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from universal_runtime.adapters.postgres.models import (
@@ -11,11 +11,16 @@ from universal_runtime.adapters.postgres.models import (
 )
 from universal_runtime.domain.assistants import Assistant
 from universal_runtime.domain.errors import ErrorCode, RuntimeFailure
-from universal_runtime.domain.identity import ApplicationId, ProjectId, WorkspaceId
+from universal_runtime.domain.identity import (
+    ApplicationId,
+    AssistantId,
+    ProjectId,
+    WorkspaceId,
+)
 
 
 class PostgresGatewayAssistantRepository:
-    """Tenant-scoped assistant repository for the shared compatibility Gateway."""
+    """Tenant-scoped assistant catalog for the shared compatibility Gateway."""
 
     def __init__(
         self,
@@ -30,7 +35,21 @@ class PostgresGatewayAssistantRepository:
         self._project_id = project_id
         self._default_application_id = default_application_id
 
-    async def _application_id_for(self, assistant: Assistant) -> str:
+    async def _tenant_application(self, application_id: str) -> ApplicationRow:
+        async with self._sessions() as session:
+            application = await session.get(ApplicationRow, application_id)
+            if (
+                application is None
+                or application.workspace_id != str(self._workspace_id)
+                or application.project_id != str(self._project_id)
+            ):
+                raise RuntimeFailure(
+                    ErrorCode.RESOURCE_NOT_FOUND,
+                    f"application not found: {application_id}",
+                )
+            return application
+
+    async def _application_id_for_create(self, assistant: Assistant) -> str:
         metadata_application = assistant.metadata.get("runtime.application_id")
         application_id = (
             str(metadata_application)
@@ -46,33 +65,30 @@ class PostgresGatewayAssistantRepository:
                 ErrorCode.INVALID_EXECUTION_INPUT,
                 "shared Gateway assistant creation requires runtime.application_id",
             )
+        await self._validate_graph(application_id, assistant.graph_id)
+        return application_id
+
+    async def _validate_graph(self, application_id: str, graph_id: str) -> None:
+        await self._tenant_application(application_id)
         async with self._sessions() as session:
-            application = await session.get(ApplicationRow, application_id)
-            if (
-                application is None
-                or application.workspace_id != str(self._workspace_id)
-                or application.project_id != str(self._project_id)
-            ):
-                raise RuntimeFailure(
-                    ErrorCode.RESOURCE_NOT_FOUND,
-                    f"application not found: {application_id}",
-                )
             graph = (
                 await session.execute(
-                    select(GraphRow).where(
+                    select(GraphRow.id).where(
                         GraphRow.application_id == application_id,
-                        GraphRow.graph_id == assistant.graph_id,
+                        GraphRow.graph_id == graph_id,
                     )
                 )
             ).scalar_one_or_none()
             if graph is None:
                 raise RuntimeFailure(
                     ErrorCode.RESOURCE_NOT_FOUND,
-                    f"graph not found: {application_id}/{assistant.graph_id}",
+                    f"graph not found: {application_id}/{graph_id}",
                 )
-        return application_id
 
-    async def _row(self, assistant_id: str) -> tuple[AssistantRow, AssistantVersionRow]:
+    async def _row(
+        self,
+        assistant_id: str,
+    ) -> tuple[AssistantRow, AssistantVersionRow]:
         async with self._sessions() as session:
             result = await session.execute(
                 select(AssistantRow, AssistantVersionRow)
@@ -101,10 +117,7 @@ class PostgresGatewayAssistantRepository:
         metadata = dict(version.metadata_json)
         metadata.setdefault("runtime.application_id", row.application_id)
         return Assistant(
-            assistant_id=__import__(
-                "universal_runtime.domain.identity",
-                fromlist=["AssistantId"],
-            ).AssistantId.parse(row.id),
+            assistant_id=AssistantId.parse(row.id),
             graph_id=row.graph_id,
             version=version.version,
             name=metadata.pop("name", None),
@@ -114,7 +127,7 @@ class PostgresGatewayAssistantRepository:
         )
 
     async def create(self, assistant: Assistant) -> Assistant:
-        application_id = await self._application_id_for(assistant)
+        application_id = await self._application_id_for_create(assistant)
         async with self._sessions() as session:
             async with session.begin():
                 existing = await session.get(AssistantRow, str(assistant.assistant_id))
@@ -124,25 +137,30 @@ class PostgresGatewayAssistantRepository:
                             ErrorCode.INVALID_EXECUTION_INPUT,
                             "assistant identifier is already used by another application",
                         )
-                    return await self.get(str(assistant.assistant_id))
-                session.add(
-                    AssistantRow(
-                        id=str(assistant.assistant_id),
-                        application_id=application_id,
-                        graph_id=assistant.graph_id,
-                        active_version=assistant.version,
+                    if existing.graph_id != assistant.graph_id:
+                        raise RuntimeFailure(
+                            ErrorCode.INVALID_EXECUTION_INPUT,
+                            "existing assistant is bound to another graph",
+                        )
+                else:
+                    session.add(
+                        AssistantRow(
+                            id=str(assistant.assistant_id),
+                            application_id=application_id,
+                            graph_id=assistant.graph_id,
+                            active_version=assistant.version,
+                        )
                     )
-                )
-                session.add(
-                    AssistantVersionRow(
-                        id=f"{assistant.assistant_id}:{assistant.version}",
-                        assistant_id=str(assistant.assistant_id),
-                        version=assistant.version,
-                        config=assistant.config,
-                        context=assistant.context,
-                        metadata_json={**assistant.metadata, "name": assistant.name},
+                    session.add(
+                        AssistantVersionRow(
+                            id=f"{assistant.assistant_id}:{assistant.version}",
+                            assistant_id=str(assistant.assistant_id),
+                            version=assistant.version,
+                            config=assistant.config,
+                            context=assistant.context,
+                            metadata_json={**assistant.metadata, "name": assistant.name},
+                        )
                     )
-                )
         return await self.get(str(assistant.assistant_id))
 
     async def get(self, assistant_id: str) -> Assistant:
@@ -177,14 +195,17 @@ class PostgresGatewayAssistantRepository:
         return tuple(self._domain(current, version) for version in versions)
 
     async def update(self, assistant_id: str, assistant: Assistant) -> Assistant:
-        row, _ = await self._row(assistant_id)
-        if assistant.graph_id != row.graph_id:
-            application_id = await self._application_id_for(assistant)
-            if application_id != row.application_id:
-                raise RuntimeFailure(
-                    ErrorCode.INVALID_EXECUTION_INPUT,
-                    "assistant cannot move between applications",
-                )
+        current, _ = await self._row(assistant_id)
+        await self._validate_graph(current.application_id, assistant.graph_id)
+        metadata_application = assistant.metadata.get("runtime.application_id")
+        if (
+            metadata_application is not None
+            and str(metadata_application) != current.application_id
+        ):
+            raise RuntimeFailure(
+                ErrorCode.INVALID_EXECUTION_INPUT,
+                "assistant cannot move between applications",
+            )
         async with self._sessions() as session:
             async with session.begin():
                 locked = (
@@ -202,7 +223,11 @@ class PostgresGatewayAssistantRepository:
                         version=version,
                         config=assistant.config,
                         context=assistant.context,
-                        metadata_json={**assistant.metadata, "name": assistant.name},
+                        metadata_json={
+                            **assistant.metadata,
+                            "runtime.application_id": current.application_id,
+                            "name": assistant.name,
+                        },
                     )
                 )
                 locked.graph_id = assistant.graph_id
@@ -215,7 +240,8 @@ class PostgresGatewayAssistantRepository:
             async with session.begin():
                 row = await session.get(AssistantRow, str(assistant_id))
                 version_row = await session.get(
-                    AssistantVersionRow, f"{assistant_id}:{version}"
+                    AssistantVersionRow,
+                    f"{assistant_id}:{version}",
                 )
                 if row is None or version_row is None:
                     raise RuntimeFailure(
@@ -244,5 +270,16 @@ class PostgresGatewayAssistantRepository:
                     await session.delete(row)
 
     async def count(self, *, graph_id: str | None = None) -> int:
-        items = await self.all()
-        return sum(1 for item in items if graph_id is None or item.graph_id == graph_id)
+        async with self._sessions() as session:
+            query = (
+                select(func.count(AssistantRow.id))
+                .select_from(AssistantRow)
+                .join(ApplicationRow, ApplicationRow.id == AssistantRow.application_id)
+                .where(
+                    ApplicationRow.workspace_id == str(self._workspace_id),
+                    ApplicationRow.project_id == str(self._project_id),
+                )
+            )
+            if graph_id is not None:
+                query = query.where(AssistantRow.graph_id == graph_id)
+            return int((await session.execute(query)).scalar_one())
