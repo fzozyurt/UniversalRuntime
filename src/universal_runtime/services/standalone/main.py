@@ -15,6 +15,7 @@ from universal_runtime.adapters.postgres.langgraph import managed_langgraph_pers
 from universal_runtime.bootstrap.runtime_config import LauncherConfig
 from universal_runtime.services.dispatcher.main import Dispatcher
 from universal_runtime.services.gateway.app import create_app
+from universal_runtime.services.gateway.shared import attach_postgres_control_plane
 from universal_runtime.services.outbox_relay.main import OutboxRelayService
 from universal_runtime.services.worker.registration import WorkerRegistrationPublisher
 
@@ -42,7 +43,7 @@ async def _serve(config: LauncherConfig) -> None:
     )
     os.environ.setdefault("UR_ACTIVATE_REVISION", "true")
 
-    application = create_app()
+    application = attach_postgres_control_plane(create_app())
     http_server = uvicorn.Server(
         uvicorn.Config(
             application,
