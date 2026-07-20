@@ -19,6 +19,14 @@ if config.config_file_name is not None:
 target_metadata = PlatformBase.metadata
 
 
+def _runtime_argument(name: str, default: str) -> str:
+    x_args = context.get_x_argument(as_dictionary=True)
+    return x_args.get(name) or config.get_main_option(
+        f"runtime.{name}",
+        default,
+    )
+
+
 def run_migrations_offline() -> None:
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
@@ -34,13 +42,22 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Any) -> None:
-    x_args = context.get_x_argument(as_dictionary=True)
+    application_id = _runtime_argument("application_id", "platform")
+    environment = _runtime_argument("environment", "default")
+    connection.execute(
+        text(f'CREATE SCHEMA IF NOT EXISTS "{DEFAULT_SCHEMAS.core}"')
+    )
+    connection.execute(
+        text(
+            f'CREATE SCHEMA IF NOT EXISTS "{DEFAULT_SCHEMAS.execution}"'
+        )
+    )
     connection.execute(
         text("SELECT pg_advisory_xact_lock(:lock_key)"),
         {
             "lock_key": migration_lock_key(
-                x_args.get("application_id", "platform"),
-                x_args.get("environment", "default"),
+                application_id,
+                environment,
                 "platform",
             )
         },
@@ -50,6 +67,7 @@ def do_run_migrations(connection: Any) -> None:
         target_metadata=target_metadata,
         include_schemas=True,
         version_table_schema=DEFAULT_SCHEMAS.core,
+        compare_type=True,
     )
     with context.begin_transaction():
         context.run_migrations()
