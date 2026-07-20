@@ -14,7 +14,7 @@ from universal_runtime.domain.execution import (
     RunCommand,
     RunStatus,
 )
-from universal_runtime.domain.identity import CommandId
+from universal_runtime.domain.identity import AttemptId, CommandId, ExecutionIdentity
 from universal_runtime.ports.cancellation import RunCancellation
 from universal_runtime.ports.outbox import OutboxRepository
 from universal_runtime.ports.repositories import ThreadApplicationBinder
@@ -107,6 +107,19 @@ class ManagedExecutionService(RuntimeExecutionService):
         )
         return created
 
+    @staticmethod
+    def _new_attempt_request(request: ExecutionRequest, run: Run) -> ExecutionRequest:
+        identity = request.identity
+        if identity.attempt_id == run.identity.attempt_id:
+            identity = ExecutionIdentity(
+                run.identity.scope,
+                run.identity.assistant_id,
+                run.identity.run_id,
+                AttemptId.new(),
+                run.identity.thread_id,
+            )
+        return replace(request, identity=identity, target=run.target)
+
     async def resume_run(self, request: ExecutionRequest) -> Run:
         run = await self._runs.get(str(request.identity.run_id))
         if run.status is not RunStatus.INTERRUPTED:
@@ -115,7 +128,7 @@ class ManagedExecutionService(RuntimeExecutionService):
                 "run is not interrupted",
             )
         resolved = await self._resolve_request(
-            replace(request, target=run.target),
+            self._new_attempt_request(request, run),
             pinned_scope=run.identity.scope,
             pinned_target=run.target,
         )
@@ -149,6 +162,8 @@ class ManagedExecutionService(RuntimeExecutionService):
         )
         if self._submission is None:
             await self._runs.update(resumed)
+            if busy_thread is not None:
+                await self._threads.update(busy_thread)
             await self._commands.publish(command)
         else:
             await self._submission.resume(
