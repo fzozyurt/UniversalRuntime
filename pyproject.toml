@@ -59,6 +59,7 @@ universal-runtime-gateway = "universal_runtime.services.gateway.main:main"
 universal-runtime-dispatcher = "universal_runtime.services.dispatcher.main:main"
 universal-runtime-worker = "universal_runtime.services.worker.main:main"
 universal-runtime-projector = "universal_runtime.services.event_projector.main:main"
+universal-runtime-standalone = "universal_runtime.services.standalone.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -77,7 +78,7 @@ markers = [
 
 [tool.coverage.run]
 branch = true
-source = ["src/universal_runtime", "services"]
+source = ["src/universal_runtime"]
 omit = ["*/__init__.py", "*/generated/*", "*/migrations/*"]
 
 [tool.coverage.report]
@@ -88,7 +89,7 @@ show_missing = true
 exclude = [".tmp", "generated"]
 target-version = "py312"
 line-length = 100
-src = ["src", "services", "tests", "scripts"]
+src = ["src", "tests", "scripts"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC", "RUF", "S", "DTZ", "N", "RET"]
@@ -101,7 +102,7 @@ mypy_path = "src"
 warn_unused_configs = true
 
 [[tool.mypy.overrides]]
-module = ["yaml.*", "a2a.*", "openlit.*"]
+module = ["yaml.*", "a2a.*", "openlit.*", "aiokafka.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
