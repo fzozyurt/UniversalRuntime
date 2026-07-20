@@ -15,6 +15,8 @@ from universal_runtime.adapters.postgres.langgraph import managed_langgraph_pers
 from universal_runtime.bootstrap.runtime_config import LauncherConfig
 from universal_runtime.services.dispatcher.main import Dispatcher
 from universal_runtime.services.gateway.app import create_app
+from universal_runtime.services.outbox_relay.main import OutboxRelayService
+from universal_runtime.services.worker.registration import WorkerRegistrationPublisher
 
 
 def _entrypoints() -> tuple[str, ...]:
@@ -22,22 +24,23 @@ def _entrypoints() -> tuple[str, ...]:
         "UR_APPLICATION_ENTRYPOINT"
     )
     if not raw:
-        raise RuntimeError("standalone mode requires an application graph entrypoint")
+        raise RuntimeError(
+            "standalone mode requires an application graph entrypoint"
+        )
     return tuple(item.strip() for item in raw.split(",") if item.strip())
 
 
 async def _serve(config: LauncherConfig) -> None:
-    """Run compatibility API, dispatcher and one application worker together.
-
-    Standalone is an application-hosted topology. Unlike the shared Gateway mode,
-    it intentionally imports user code and owns the application state persistence.
-    """
-    os.environ.setdefault("UR_WORKER_TARGETS", f"127.0.0.1:{config.grpc_port}")
+    """Run API, outbox relay, dispatcher and one application worker together."""
     os.environ.setdefault(
         "UR_GATEWAY_REGISTER_URL",
         f"http://127.0.0.1:{config.port}/internal/workers/register",
     )
-    os.environ.setdefault("UR_WORKER_ADVERTISE_TARGET", f"127.0.0.1:{config.grpc_port}")
+    os.environ.setdefault(
+        "UR_WORKER_ADVERTISE_TARGET",
+        f"127.0.0.1:{config.grpc_port}",
+    )
+    os.environ.setdefault("UR_ACTIVATE_REVISION", "true")
 
     application = create_app()
     http_server = uvicorn.Server(
@@ -46,7 +49,9 @@ async def _serve(config: LauncherConfig) -> None:
             host=config.host,
             port=config.port,
             timeout_keep_alive=75,
-            timeout_graceful_shutdown=int(config.worker_drain_timeout_seconds),
+            timeout_graceful_shutdown=int(
+                config.worker_drain_timeout_seconds
+            ),
             log_config=None,
         )
     )
@@ -63,40 +68,64 @@ async def _serve(config: LauncherConfig) -> None:
         application_key=os.environ.get("UR_APPLICATION_ID", "default"),
     )
     persistence = await persistence_context.__aenter__()
-    adapters = {}
+    adapters: dict[str, LangGraphAdapter] = {}
+    graph_entrypoints: dict[str, str] = {}
     for entrypoint in _entrypoints():
         module_name, attribute = entrypoint.split(":", 1)
         target = getattr(importlib.import_module(module_name), attribute)
         adapter = LangGraphAdapter(
             target,
             persistence_mode="platform-managed",
-            providers=postgres_persistence(persistence.checkpointer, persistence.store),
+            providers=postgres_persistence(
+                persistence.checkpointer,
+                persistence.store,
+            ),
         )
-        adapters[adapter.descriptor.graph_id] = adapter
+        graph_id = adapter.descriptor.graph_id
+        if graph_id in adapters:
+            raise RuntimeError(
+                f"duplicate graph_id in application image: {graph_id}"
+            )
+        adapters[graph_id] = adapter
+        graph_entrypoints[graph_id] = entrypoint
 
     worker = WorkerServer.create(
         configured_concurrency=config.worker_max_concurrency,
         policy_ceiling=int(os.getenv("UR_WORKER_POLICY_CEILING", "64")),
         adapter=adapters,
     )
+    publisher = WorkerRegistrationPublisher(
+        adapters,
+        graph_entrypoints,
+        worker,
+        config,
+    )
     dispatcher = Dispatcher()
+    outbox_relay = OutboxRelayService()
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     loop.add_signal_handler(signal.SIGTERM, stop.set)
     loop.add_signal_handler(signal.SIGINT, stop.set)
-    dispatch_task: asyncio.Task[None] | None = None
+    tasks: list[asyncio.Task[None]] = []
     try:
         await worker.start_listening("127.0.0.1", config.grpc_port)
-        dispatch_task = asyncio.create_task(dispatcher.run(stop))
+        await publisher.publish(attempts=10)
+        tasks = [
+            asyncio.create_task(publisher.heartbeat_loop()),
+            asyncio.create_task(dispatcher.run(stop)),
+            asyncio.create_task(outbox_relay.run(stop)),
+        ]
         await stop.wait()
     finally:
-        if dispatch_task is not None:
-            dispatch_task.cancel()
-            await asyncio.gather(dispatch_task, return_exceptions=True)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await publisher.publish_draining()
         await worker.stop(config.worker_drain_timeout_seconds)
         http_server.should_exit = True
         await http_task
         await dispatcher.close()
+        await outbox_relay.close()
         await persistence_context.__aexit__(None, None, None)
         await engine.dispose()
 
