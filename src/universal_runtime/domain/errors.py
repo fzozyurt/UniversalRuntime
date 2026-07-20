@@ -38,12 +38,15 @@ class ErrorCode(StrEnum):
     APPLICATION_MIGRATION_FAILED = "APPLICATION_MIGRATION_FAILED"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class RuntimeFailureError(Exception):
     code: ErrorCode
     message: str
     retryable: bool = False
     details: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        Exception.__init__(self, self.message)
 
     def __str__(self) -> str:
         return f"{self.code}: {self.message}"
