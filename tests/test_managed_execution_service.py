@@ -16,6 +16,7 @@ from universal_runtime.domain.events import RuntimeEventType
 from universal_runtime.domain.execution import (
     ExecutionRequest,
     ExecutionTarget,
+    QueuePriority,
     Run,
     RunCommand,
     RunStatus,
@@ -135,10 +136,7 @@ async def test_managed_service_submits_run_thread_and_command_as_one_intent() ->
     request = ExecutionRequest(
         identity=_identity(),
         input={"messages": []},
-        priority=__import__(
-            "universal_runtime.domain.execution",
-            fromlist=["QueuePriority"],
-        ).QueuePriority.INTERACTIVE,
+        priority=QueuePriority.INTERACTIVE,
         target=ExecutionTarget("graph-not-assistant", 3),
     )
 
