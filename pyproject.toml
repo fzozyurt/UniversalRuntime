@@ -49,6 +49,8 @@ dev = [
   "mypy>=1.12",
   "types-jsonschema>=4.23",
   "types-pyyaml>=6.0",
+  "types-grpcio>=1.0",
+  "types-protobuf>=5.28",
   "build>=1.2",
   "grpcio-tools>=1.66",
 ]
@@ -107,5 +109,12 @@ module = ["yaml.*", "a2a.*", "openlit.*", "aiokafka.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["universal_runtime.adapters.grpc.*", "universal_runtime.adapters.grpc.generated.*", "grpc.*", "grpc_health.*", "google.protobuf.*"]
+module = [
+  "universal_runtime.adapters.grpc.*",
+  "universal_runtime.adapters.grpc.generated.*",
+  "grpc.*",
+  "grpc_health.*",
+  "google.protobuf.*",
+]
 ignore_errors = true
+ignore_missing_imports = true
