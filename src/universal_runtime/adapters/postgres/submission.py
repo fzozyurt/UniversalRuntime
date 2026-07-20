@@ -64,14 +64,9 @@ class PostgresRunSubmissionStore(RunSubmissionStore):
             id=str(command.command_id),
             event_id=str(command.command_id),
             aggregate_type="run_command",
-            aggregate_id=(
-                f"{run.identity.application_id}:"
-                f"{run.identity.thread_id or 'stateless'}"
-            ),
+            aggregate_id=(f"{run.identity.application_id}:{run.identity.thread_id or 'stateless'}"),
             topic=self._topics[command.priority],
-            idempotency_key=(
-                f"run-command:{run.run_id}:{run.identity.attempt_id}"
-            ),
+            idempotency_key=(f"run-command:{run.run_id}:{run.identity.attempt_id}"),
             payload=run_command_to_document(command),
             published_at=None,
         )
@@ -86,9 +81,7 @@ class PostgresRunSubmissionStore(RunSubmissionStore):
     ) -> ThreadRow:
         thread_row = (
             await session.execute(
-                select(ThreadRow)
-                .where(ThreadRow.id == str(thread.thread_id))
-                .with_for_update()
+                select(ThreadRow).where(ThreadRow.id == str(thread.thread_id)).with_for_update()
             )
         ).scalar_one_or_none()
         if thread_row is None:
@@ -97,9 +90,8 @@ class PostgresRunSubmissionStore(RunSubmissionStore):
                 f"thread not found: {thread.thread_id}",
             )
         identity = run.identity
-        if (
-            thread_row.workspace_id != str(identity.workspace_id)
-            or thread_row.project_id != str(identity.project_id)
+        if thread_row.workspace_id != str(identity.workspace_id) or thread_row.project_id != str(
+            identity.project_id
         ):
             raise RuntimeFailure(
                 ErrorCode.RESOURCE_NOT_FOUND,
@@ -206,9 +198,7 @@ class PostgresRunSubmissionStore(RunSubmissionStore):
                 async with session.begin():
                     row = (
                         await session.execute(
-                            select(RunRow)
-                            .where(RunRow.id == str(run.run_id))
-                            .with_for_update()
+                            select(RunRow).where(RunRow.id == str(run.run_id)).with_for_update()
                         )
                     ).scalar_one_or_none()
                     if row is None:
@@ -216,9 +206,8 @@ class PostgresRunSubmissionStore(RunSubmissionStore):
                             ErrorCode.RUN_NOT_FOUND,
                             f"run not found: {run.run_id}",
                         )
-                    if (
-                        row.status == RunStatus.PENDING.value
-                        and row.attempt_id == str(run.identity.attempt_id)
+                    if row.status == RunStatus.PENDING.value and row.attempt_id == str(
+                        run.identity.attempt_id
                     ):
                         return run
                     if row.status != RunStatus.INTERRUPTED.value:

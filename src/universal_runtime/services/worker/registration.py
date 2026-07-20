@@ -56,12 +56,8 @@ class WorkerRegistrationPublisher:
             "UR_WORKER_ADVERTISE_TARGET",
             f"{self.config.grpc_host}:{self.config.grpc_port}",
         )
-        status = status_override or (
-            "busy" if self.server.worker.available_slots == 0 else "ready"
-        )
-        available_slots = (
-            0 if status == "draining" else self.server.worker.available_slots
-        )
+        status = status_override or ("busy" if self.server.worker.available_slots == 0 else "ready")
+        available_slots = 0 if status == "draining" else self.server.worker.available_slots
         revision_id = os.environ.get("UR_REVISION_ID", "active")
         return {
             "worker_id": os.environ.get("UR_INSTANCE_ID", "worker"),
@@ -120,9 +116,7 @@ class WorkerRegistrationPublisher:
                     if attempt + 1 < attempts:
                         await asyncio.sleep(1)
             if last_error is not None:
-                raise RuntimeError(
-                    f"worker registration failed: {url}"
-                ) from last_error
+                raise RuntimeError(f"worker registration failed: {url}") from last_error
 
     async def heartbeat_loop(self) -> None:
         interval = max(

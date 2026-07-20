@@ -77,9 +77,7 @@ class PostgresControlPlaneCatalog(ApplicationDeploymentCatalog, ExecutionPlanRes
                 )
                 current_active = (
                     await session.execute(
-                        text(
-                            "SELECT active_revision_id FROM rt_core.applications WHERE id = :id"
-                        ),
+                        text("SELECT active_revision_id FROM rt_core.applications WHERE id = :id"),
                         {"id": str(registration.application_id)},
                     )
                 ).scalar_one_or_none()
@@ -126,14 +124,18 @@ class PostgresControlPlaneCatalog(ApplicationDeploymentCatalog, ExecutionPlanRes
                     },
                 )
                 revision_row = (
-                    await session.execute(
-                        text(
-                            "SELECT application_id, image_digest, descriptor_hash "
-                            "FROM rt_core.application_runtime_revisions WHERE id = :id"
-                        ),
-                        {"id": str(registration.revision_id)},
+                    (
+                        await session.execute(
+                            text(
+                                "SELECT application_id, image_digest, descriptor_hash "
+                                "FROM rt_core.application_runtime_revisions WHERE id = :id"
+                            ),
+                            {"id": str(registration.revision_id)},
+                        )
                     )
-                ).mappings().one()
+                    .mappings()
+                    .one()
+                )
                 if (
                     revision_row["application_id"] != str(registration.application_id)
                     or revision_row["image_digest"] != registration.image_digest
@@ -225,9 +227,7 @@ class PostgresControlPlaneCatalog(ApplicationDeploymentCatalog, ExecutionPlanRes
                                 "descriptor": _canonical(graph.descriptor),
                             },
                         )
-                    assistant_id = default_assistant_id(
-                        registration.application_id, graph.graph_id
-                    )
+                    assistant_id = default_assistant_id(registration.application_id, graph.graph_id)
                     await session.execute(
                         text(
                             "INSERT INTO rt_core.assistants "
@@ -269,9 +269,7 @@ class PostgresControlPlaneCatalog(ApplicationDeploymentCatalog, ExecutionPlanRes
                             version=1,
                             name=graph.graph_id,
                             metadata={
-                                key: value
-                                for key, value in metadata.items()
-                                if key != "name"
+                                key: value for key, value in metadata.items() if key != "name"
                             },
                         )
                     )
@@ -285,28 +283,32 @@ class PostgresControlPlaneCatalog(ApplicationDeploymentCatalog, ExecutionPlanRes
     ) -> ResolvedExecutionPlan:
         async with self._sessions() as session:
             row = (
-                await session.execute(
-                    text(
-                        "SELECT a.application_id, a.graph_id, av.version AS resolved_version, "
-                        "av.config, av.context, av.metadata, app.workspace_id, app.project_id, "
-                        "app.active_revision_id, d.id AS deployment_id "
-                        "FROM rt_core.assistants a "
-                        "JOIN rt_core.assistant_versions av ON av.assistant_id = a.id "
-                        "AND av.version = COALESCE(:version, a.active_version) "
-                        "JOIN rt_core.applications app ON app.id = a.application_id "
-                        "JOIN rt_core.deployments d ON d.application_id = app.id "
-                        "AND d.revision_id = app.active_revision_id "
-                        "WHERE a.id = :assistant_id AND d.environment = :environment "
-                        "AND d.status IN ('ready', 'active') "
-                        "ORDER BY d.updated_at DESC LIMIT 1"
-                    ),
-                    {
-                        "assistant_id": str(assistant_id),
-                        "environment": self._environment,
-                        "version": version,
-                    },
+                (
+                    await session.execute(
+                        text(
+                            "SELECT a.application_id, a.graph_id, av.version AS resolved_version, "
+                            "av.config, av.context, av.metadata, app.workspace_id, app.project_id, "
+                            "app.active_revision_id, d.id AS deployment_id "
+                            "FROM rt_core.assistants a "
+                            "JOIN rt_core.assistant_versions av ON av.assistant_id = a.id "
+                            "AND av.version = COALESCE(:version, a.active_version) "
+                            "JOIN rt_core.applications app ON app.id = a.application_id "
+                            "JOIN rt_core.deployments d ON d.application_id = app.id "
+                            "AND d.revision_id = app.active_revision_id "
+                            "WHERE a.id = :assistant_id AND d.environment = :environment "
+                            "AND d.status IN ('ready', 'active') "
+                            "ORDER BY d.updated_at DESC LIMIT 1"
+                        ),
+                        {
+                            "assistant_id": str(assistant_id),
+                            "environment": self._environment,
+                            "version": version,
+                        },
+                    )
                 )
-            ).mappings().first()
+                .mappings()
+                .first()
+            )
             if row is None:
                 suffix = f" version {version}" if version is not None else ""
                 raise RuntimeFailure(

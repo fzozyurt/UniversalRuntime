@@ -24,9 +24,8 @@ class SharedPostgresThreadRepository:
         self._project_id = project_id
 
     def _matches_tenant(self, row: ThreadRow) -> bool:
-        return (
-            row.workspace_id == str(self._workspace_id)
-            and row.project_id == str(self._project_id)
+        return row.workspace_id == str(self._workspace_id) and row.project_id == str(
+            self._project_id
         )
 
     async def create(self, thread: Thread) -> Thread:
@@ -53,9 +52,7 @@ class SharedPostgresThreadRepository:
         async with self._sessions() as session:
             row = await session.get(ThreadRow, str(thread_id))
             if row is None or not self._matches_tenant(row):
-                raise RuntimeFailure(
-                    ErrorCode.RESOURCE_NOT_FOUND, f"thread not found: {thread_id}"
-                )
+                raise RuntimeFailure(ErrorCode.RESOURCE_NOT_FOUND, f"thread not found: {thread_id}")
             return Thread(
                 ThreadId.parse(row.id),
                 ThreadStatus(row.status),
@@ -119,8 +116,7 @@ class SharedPostgresThreadRepository:
                 )
                 for row in rows
                 if all(
-                    row.metadata_json.get(key) == value
-                    for key, value in (metadata or {}).items()
+                    row.metadata_json.get(key) == value for key, value in (metadata or {}).items()
                 )
             )
 
@@ -149,18 +145,15 @@ class PostgresThreadApplicationBinder:
             async with session.begin():
                 row = (
                     await session.execute(
-                        select(ThreadRow)
-                        .where(ThreadRow.id == str(thread_id))
-                        .with_for_update()
+                        select(ThreadRow).where(ThreadRow.id == str(thread_id)).with_for_update()
                     )
                 ).scalar_one_or_none()
                 if row is None:
                     raise RuntimeFailure(
                         ErrorCode.RESOURCE_NOT_FOUND, f"thread not found: {thread_id}"
                     )
-                if (
-                    row.workspace_id != str(scope.workspace_id)
-                    or row.project_id != str(scope.project_id)
+                if row.workspace_id != str(scope.workspace_id) or row.project_id != str(
+                    scope.project_id
                 ):
                     raise RuntimeFailure(
                         ErrorCode.RESOURCE_NOT_FOUND, f"thread not found: {thread_id}"

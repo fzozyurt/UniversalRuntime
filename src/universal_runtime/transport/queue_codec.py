@@ -145,11 +145,7 @@ def run_command_from_document(document: JsonObject) -> RunCommand:
         AttemptId.parse(_string(raw_identity.get("attempt_id"), "identity.attempt_id")),
         (
             ThreadId.parse(thread_id)
-            if (
-                thread_id := _optional_string(
-                    raw_identity.get("thread_id"), "identity.thread_id"
-                )
-            )
+            if (thread_id := _optional_string(raw_identity.get("thread_id"), "identity.thread_id"))
             else None
         ),
     )
@@ -213,13 +209,9 @@ def run_command_from_document(document: JsonObject) -> RunCommand:
             default=request.priority,
         ),
         available_at=(
-            datetime.fromisoformat(available_at)
-            if available_at is not None
-            else datetime.now(UTC)
+            datetime.fromisoformat(available_at) if available_at is not None else datetime.now(UTC)
         ),
         created_at=(
-            datetime.fromisoformat(created_at)
-            if created_at is not None
-            else datetime.now(UTC)
+            datetime.fromisoformat(created_at) if created_at is not None else datetime.now(UTC)
         ),
     )

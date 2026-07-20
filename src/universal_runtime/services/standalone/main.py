@@ -25,9 +25,7 @@ def _entrypoints() -> tuple[str, ...]:
         "UR_APPLICATION_ENTRYPOINT"
     )
     if not raw:
-        raise RuntimeError(
-            "standalone mode requires an application graph entrypoint"
-        )
+        raise RuntimeError("standalone mode requires an application graph entrypoint")
     return tuple(item.strip() for item in raw.split(",") if item.strip())
 
 
@@ -50,9 +48,7 @@ async def _serve(config: LauncherConfig) -> None:
             host=config.host,
             port=config.port,
             timeout_keep_alive=75,
-            timeout_graceful_shutdown=int(
-                config.worker_drain_timeout_seconds
-            ),
+            timeout_graceful_shutdown=int(config.worker_drain_timeout_seconds),
             log_config=None,
         )
     )
@@ -84,9 +80,7 @@ async def _serve(config: LauncherConfig) -> None:
         )
         graph_id = adapter.descriptor.graph_id
         if graph_id in adapters:
-            raise RuntimeError(
-                f"duplicate graph_id in application image: {graph_id}"
-            )
+            raise RuntimeError(f"duplicate graph_id in application image: {graph_id}")
         adapters[graph_id] = adapter
         graph_entrypoints[graph_id] = entrypoint
 

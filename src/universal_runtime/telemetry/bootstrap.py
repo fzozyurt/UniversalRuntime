@@ -53,13 +53,9 @@ def _configure_provider(component: str) -> Any:
     with _PROVIDER_LOCK:
         if not _PROVIDER_CONFIGURED:
             try:
-                resources = importlib.import_module(
-                    "opentelemetry.sdk.resources"
-                )
+                resources = importlib.import_module("opentelemetry.sdk.resources")
                 sdk_trace = importlib.import_module("opentelemetry.sdk.trace")
-                export = importlib.import_module(
-                    "opentelemetry.sdk.trace.export"
-                )
+                export = importlib.import_module("opentelemetry.sdk.trace.export")
                 provider = sdk_trace.TracerProvider(
                     resource=resources.Resource.create(
                         {
@@ -88,9 +84,7 @@ def _configure_provider(component: str) -> Any:
                     )
                     exporter_module = importlib.import_module(module_name)
                     exporter = exporter_module.OTLPSpanExporter(endpoint=endpoint)
-                    provider.add_span_processor(
-                        export.BatchSpanProcessor(exporter)
-                    )
+                    provider.add_span_processor(export.BatchSpanProcessor(exporter))
                 trace.set_tracer_provider(provider)
                 _PROVIDER_CONFIGURED = True
             except (ImportError, ModuleNotFoundError):

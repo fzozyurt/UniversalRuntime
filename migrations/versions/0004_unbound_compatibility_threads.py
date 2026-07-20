@@ -29,6 +29,4 @@ def downgrade() -> None:
         raise RuntimeError(
             "cannot restore NOT NULL application_id while unbound compatibility threads exist"
         )
-    bind.execute(
-        text("ALTER TABLE rt_exec.threads ALTER COLUMN application_id SET NOT NULL")
-    )
+    bind.execute(text("ALTER TABLE rt_exec.threads ALTER COLUMN application_id SET NOT NULL"))

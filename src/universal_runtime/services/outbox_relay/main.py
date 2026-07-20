@@ -16,9 +16,7 @@ _LOGGER = logging.getLogger(__name__)
 class OutboxRelayService:
     def __init__(self) -> None:
         self.config = LauncherConfig.from_environment()
-        database_url = os.environ.get("UR_PLATFORM_DATABASE_URL") or os.environ[
-            "UR_DATABASE_URL"
-        ]
+        database_url = os.environ.get("UR_PLATFORM_DATABASE_URL") or os.environ["UR_DATABASE_URL"]
         self.engine = create_engine(
             database_url,
             pool_size=int(os.environ.get("UR_OUTBOX_DB_POOL_SIZE", "5")),

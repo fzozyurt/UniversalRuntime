@@ -53,9 +53,7 @@ class AioKafkaRunCommandQueue(RunCommandQueue):
 
     async def _start(self, *, consumer: bool) -> None:
         if self._producer is None:
-            self._producer = AIOKafkaProducer(
-                bootstrap_servers=self._bootstrap_servers
-            )
+            self._producer = AIOKafkaProducer(bootstrap_servers=self._bootstrap_servers)
             await self._producer.start()
         if consumer and self._consumer is None:
             instance = AIOKafkaConsumer(

@@ -87,17 +87,11 @@ def create_worker_registry_router(
             )
         try:
             graphs = _graphs(payload)
-            application_id = ApplicationId.parse(
-                str(payload.get("application_id", "default"))
-            )
+            application_id = ApplicationId.parse(str(payload.get("application_id", "default")))
             revision_id = RevisionId.parse(str(payload.get("revision_id", "active")))
-            deployment_id = DeploymentId.parse(
-                str(payload.get("deployment_id", "local"))
-            )
+            deployment_id = DeploymentId.parse(str(payload.get("deployment_id", "local")))
             deployment = ApplicationDeploymentRegistration(
-                workspace_id=WorkspaceId.parse(
-                    str(payload.get("workspace_id", "default"))
-                ),
+                workspace_id=WorkspaceId.parse(str(payload.get("workspace_id", "default"))),
                 project_id=ProjectId.parse(str(payload.get("project_id", "default"))),
                 application_id=application_id,
                 application_name=str(
@@ -106,9 +100,7 @@ def create_worker_registry_router(
                 revision_id=revision_id,
                 deployment_id=deployment_id,
                 environment=str(payload.get("environment", "local")),
-                image_digest=str(
-                    payload.get("image_digest") or f"unresolved:{revision_id}"
-                ),
+                image_digest=str(payload.get("image_digest") or f"unresolved:{revision_id}"),
                 graphs=graphs,
                 revision_metadata=cast(
                     JsonObject,
@@ -131,9 +123,7 @@ def create_worker_registry_router(
                 max_concurrency=int(payload.get("max_concurrency", 1)),
                 active_executions=int(payload.get("active_executions", 0)),
                 available_slots=int(payload.get("available_slots", 1)),
-                status=WorkerStatus(
-                    str(payload.get("status", WorkerStatus.READY.value))
-                ),
+                status=WorkerStatus(str(payload.get("status", WorkerStatus.READY.value))),
                 capabilities=cast(
                     JsonObject,
                     payload.get("manifests") or payload.get("capabilities") or {},
@@ -156,9 +146,7 @@ def create_worker_registry_router(
             "revision_id": str(stored.revision_id),
             "deployment_id": str(stored.deployment_id),
             "graph_ids": sorted(stored.graph_ids),
-            "default_assistant_ids": [
-                str(assistant.assistant_id) for assistant in assistants
-            ],
+            "default_assistant_ids": [str(assistant.assistant_id) for assistant in assistants],
             "target": stored.grpc_target,
             "expires_at": stored.expires_at.isoformat(),
         }
@@ -169,9 +157,7 @@ def create_worker_registry_router(
         graph_id: str,
     ) -> list[JsonObject]:
         now = datetime.now(UTC)
-        candidates = await registry.candidates(
-            DeploymentId.parse(deployment_id), graph_id, now=now
-        )
+        candidates = await registry.candidates(DeploymentId.parse(deployment_id), graph_id, now=now)
         return [
             {
                 "worker_id": str(item.worker_id),

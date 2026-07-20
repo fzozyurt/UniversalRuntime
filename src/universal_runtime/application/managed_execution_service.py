@@ -210,9 +210,7 @@ class ManagedExecutionService(RuntimeExecutionService):
         adapter = self._active_adapters.get(str(run.run_id))
         if adapter is not None:
             try:
-                await adapter.cancel(
-                    ExecutionRequest(identity=run.identity, target=run.target)
-                )
+                await adapter.cancel(ExecutionRequest(identity=run.identity, target=run.target))
                 owner_notified = True
             except Exception:
                 _LOGGER.exception(

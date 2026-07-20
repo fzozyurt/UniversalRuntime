@@ -38,9 +38,7 @@ def main(*, run_forever: bool = True) -> int:
 
 async def _serve(config: LauncherConfig) -> None:
     entrypoints = _entrypoints()
-    database_url = os.environ.get("UR_STATE_DATABASE_URL") or os.environ[
-        "UR_DATABASE_URL"
-    ]
+    database_url = os.environ.get("UR_STATE_DATABASE_URL") or os.environ["UR_DATABASE_URL"]
     engine = create_engine(
         database_url,
         pool_size=int(os.environ.get("UR_WORKER_DB_POOL_SIZE", "30")),
@@ -70,9 +68,7 @@ async def _serve(config: LauncherConfig) -> None:
         )
         graph_id = adapter.descriptor.graph_id
         if graph_id in adapters:
-            raise RuntimeError(
-                f"duplicate graph_id in application image: {graph_id}"
-            )
+            raise RuntimeError(f"duplicate graph_id in application image: {graph_id}")
         adapters[graph_id] = adapter
         graph_entrypoints[graph_id] = entrypoint
 
@@ -106,9 +102,7 @@ def _entrypoints() -> tuple[str, ...]:
         "UR_APPLICATION_ENTRYPOINT"
     )
     if not raw:
-        raise RuntimeError(
-            "UR_APPLICATION_ENTRYPOINT or UR_APPLICATION_ENTRYPOINTS is required"
-        )
+        raise RuntimeError("UR_APPLICATION_ENTRYPOINT or UR_APPLICATION_ENTRYPOINTS is required")
     return tuple(item.strip() for item in raw.split(",") if item.strip())
 
 

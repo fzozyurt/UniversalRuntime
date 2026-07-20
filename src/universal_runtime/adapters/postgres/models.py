@@ -223,7 +223,9 @@ class RunRow(AuditMixin, PlatformBase):
     revision_id: Mapped[str] = mapped_column(String(255), nullable=False)
     deployment_id: Mapped[str] = mapped_column(String(255), nullable=False)
     assistant_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    assistant_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+    assistant_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("1")
+    )
     graph_id: Mapped[str] = mapped_column(
         String(255), nullable=False, server_default=text("'default'")
     )
@@ -376,7 +378,9 @@ class WorkerRow(AuditMixin, PlatformBase):
     graph_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     max_concurrency: Mapped[int] = mapped_column(Integer, nullable=False)
-    active_executions: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    active_executions: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
     available_slots: Mapped[int] = mapped_column(Integer, nullable=False)
     capabilities: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     last_heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

@@ -16,9 +16,7 @@ from universal_runtime.adapters.fastapi.detector import detect_asgi_application
 from universal_runtime.bootstrap.local import create_local_runtime
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-SCHEMA_PATH = (
-    PROJECT_ROOT / "contracts" / "config" / "runtime-application.schema.json"
-)
+SCHEMA_PATH = PROJECT_ROOT / "contracts" / "config" / "runtime-application.schema.json"
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -75,9 +73,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def _validate_config(path: Path) -> int:
     document = yaml.safe_load(path.read_text(encoding="utf-8"))
-    schema_path = Path(
-        os.environ.get("UR_CONTRACT_SCHEMA_PATH", str(SCHEMA_PATH))
-    )
+    schema_path = Path(os.environ.get("UR_CONTRACT_SCHEMA_PATH", str(SCHEMA_PATH)))
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     errors = sorted(Draft202012Validator(schema).iter_errors(document), key=str)
     if errors:
@@ -93,9 +89,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not effective_argv and os.environ.get("UR_MODE"):
         mode = os.environ["UR_MODE"]
         command_argv = sys.argv[1:]
-        effective_argv = (
-            command_argv if command_argv[:1] == [mode] else [mode, *command_argv]
-        )
+        effective_argv = command_argv if command_argv[:1] == [mode] else [mode, *command_argv]
     args = _parser().parse_args(effective_argv)
     if args.command == "validate-config":
         return _validate_config(args.path)
@@ -190,10 +184,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "UR_DATABASE_URL"
         )
         if not database_url:
-            print(
-                "UR_MIGRATION_DATABASE_URL or UR_DATABASE_URL is required "
-                "for migrations"
-            )
+            print("UR_MIGRATION_DATABASE_URL or UR_DATABASE_URL is required for migrations")
             return 2
 
         async def run_migration() -> None:

@@ -70,9 +70,7 @@ class Run:
             }
             and status != self.status
         ):
-            raise ValueError(
-                f"terminal run cannot transition from {self.status} to {status}"
-            )
+            raise ValueError(f"terminal run cannot transition from {self.status} to {status}")
         return Run(
             self.identity,
             status,
@@ -91,16 +89,12 @@ class Run:
         if self.status is RunStatus.PENDING:
             return self
         if self.status is not RunStatus.RUNNING:
-            raise ValueError(
-                f"only a running run can be requeued, got {self.status}"
-            )
+            raise ValueError(f"only a running run can be requeued, got {self.status}")
         return self._change(RunStatus.PENDING, now)
 
     def resume(self, identity: ExecutionIdentity, now: datetime) -> Run:
         if self.status is not RunStatus.INTERRUPTED:
-            raise ValueError(
-                f"only an interrupted run can be resumed, got {self.status}"
-            )
+            raise ValueError(f"only an interrupted run can be resumed, got {self.status}")
         if identity.run_id != self.identity.run_id:
             raise ValueError("resume attempt must preserve run_id")
         if identity.scope != self.identity.scope:

@@ -29,7 +29,5 @@ class ApplicationBoundExecutionService(RuntimeExecutionService):
         resolved = await self._resolve_request(request)
         thread_id = resolved.identity.thread_id
         if thread_id is not None:
-            await self._application_thread_binder.bind(
-                str(thread_id), resolved.identity.scope
-            )
+            await self._application_thread_binder.bind(str(thread_id), resolved.identity.scope)
         return await super().start_run(resolved, outbox=outbox)

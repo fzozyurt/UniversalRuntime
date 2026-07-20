@@ -47,9 +47,7 @@ def _application_scope() -> ApplicationScope:
 
 
 def create_production_runtime() -> LocalRuntime:
-    database_url = os.environ.get("UR_PLATFORM_DATABASE_URL") or os.environ.get(
-        "UR_DATABASE_URL"
-    )
+    database_url = os.environ.get("UR_PLATFORM_DATABASE_URL") or os.environ.get("UR_DATABASE_URL")
     if not database_url:
         raise RuntimeError("UR_PLATFORM_DATABASE_URL or UR_DATABASE_URL is required")
     engine = create_engine(
@@ -106,17 +104,13 @@ def create_production_runtime() -> LocalRuntime:
             QueuePriority.BATCH: topics.batch,
         },
     )
-    capacity = ExecutionCapacity(
-        int(os.environ.get("UR_WORKER_MAX_CONCURRENCY", "8"))
-    )
+    capacity = ExecutionCapacity(int(os.environ.get("UR_WORKER_MAX_CONCURRENCY", "8")))
     adapters = InMemoryAdapterRegistry()
     execution = ManagedExecutionService(
         thread_binder=thread_binder,
         cancellation=LeasedGrpcRunCancellation(
             workers,
-            timeout_seconds=float(
-                os.environ.get("UR_CANCEL_RPC_TIMEOUT_SECONDS", "3")
-            ),
+            timeout_seconds=float(os.environ.get("UR_CANCEL_RPC_TIMEOUT_SECONDS", "3")),
         ),
         submission=submission,
         threads=threads,

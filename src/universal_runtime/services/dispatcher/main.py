@@ -95,9 +95,7 @@ def _retryable(exc: BaseException) -> bool:
 class Dispatcher:
     def __init__(self) -> None:
         self.config = LauncherConfig.from_environment()
-        database_url = os.environ.get("UR_PLATFORM_DATABASE_URL") or os.environ[
-            "UR_DATABASE_URL"
-        ]
+        database_url = os.environ.get("UR_PLATFORM_DATABASE_URL") or os.environ["UR_DATABASE_URL"]
         self.engine = create_engine(
             database_url,
             pool_size=int(os.environ.get("UR_DISPATCHER_DB_POOL_SIZE", "5")),
@@ -124,8 +122,7 @@ class Dispatcher:
             if target.strip()
         )
         self._allow_static_fallback = (
-            os.environ.get("UR_ALLOW_STATIC_WORKER_FALLBACK", "false").lower()
-            in _TRUE_VALUES
+            os.environ.get("UR_ALLOW_STATIC_WORKER_FALLBACK", "false").lower() in _TRUE_VALUES
         )
         self._fallback_index = 0
         self._max_attempts = max(
@@ -163,9 +160,7 @@ class Dispatcher:
     async def _acquire_worker(self, receipt: Any) -> tuple[str, WorkerLease | None]:
         request = receipt.command.request
         now = datetime.now(UTC)
-        expires_at = now + timedelta(
-            seconds=request.timeout_seconds + self._lease_grace_seconds
-        )
+        expires_at = now + timedelta(seconds=request.timeout_seconds + self._lease_grace_seconds)
         try:
             lease = await self.workers.acquire(
                 receipt.identity.deployment_id,
@@ -178,9 +173,7 @@ class Dispatcher:
         except RuntimeFailure:
             if not self._allow_static_fallback or not self._fallback_targets:
                 raise
-            target = self._fallback_targets[
-                self._fallback_index % len(self._fallback_targets)
-            ]
+            target = self._fallback_targets[self._fallback_index % len(self._fallback_targets)]
             self._fallback_index += 1
             _LOGGER.warning(
                 "using explicitly enabled static worker fallback run_id=%s target=%s",
@@ -283,9 +276,7 @@ class Dispatcher:
         try:
             worker_target, worker_lease = await self._acquire_worker(receipt)
             await self.runs.update(run.mark_running(datetime.now(UTC)))
-            stub = execution_pb2_grpc.ExecutionServiceStub(
-                self._channel(worker_target)
-            )
+            stub = execution_pb2_grpc.ExecutionServiceStub(self._channel(worker_target))
             terminal = False
             last_result: Any = None
             async for event in stub.Stream(
@@ -297,10 +288,7 @@ class Dispatcher:
                     RuntimeEventType(event.type),
                     tuple(event.namespace),
                     value_to_python(event.data),
-                    {
-                        key: value_to_python(value)
-                        for key, value in event.native.fields.items()
-                    },
+                    {key: value_to_python(value) for key, value in event.native.fields.items()},
                 )
                 await self.events.append(draft)
                 if event.type == "state.values":
@@ -314,13 +302,9 @@ class Dispatcher:
                     terminal = True
                     current = await self.runs.get(str(run.run_id))
                     if event.type == "run.completed":
-                        await self.runs.update(
-                            current.complete(last_result, datetime.now(UTC))
-                        )
+                        await self.runs.update(current.complete(last_result, datetime.now(UTC)))
                     elif event.type == "run.interrupted":
-                        await self.runs.update(
-                            current.mark_interrupted(datetime.now(UTC))
-                        )
+                        await self.runs.update(current.mark_interrupted(datetime.now(UTC)))
                     elif event.type == "run.cancelled":
                         await self.runs.update(current.cancel(datetime.now(UTC)))
                     else:
@@ -335,9 +319,7 @@ class Dispatcher:
                         )
             if not terminal:
                 current = await self.runs.get(str(run.run_id))
-                await self.runs.update(
-                    current.complete(last_result, datetime.now(UTC))
-                )
+                await self.runs.update(current.complete(last_result, datetime.now(UTC)))
             if run.thread_id:
                 thread = await self.threads.get(str(run.thread_id))
                 await self.threads.update(thread.mark_idle(datetime.now(UTC)))

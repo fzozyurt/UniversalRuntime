@@ -31,21 +31,23 @@ class PostgresRunCommandOutboxRelay:
         async with self._sessions() as session:
             async with session.begin():
                 rows = (
-                    await session.execute(
-                        select(OutboxEventRow)
-                        .where(
-                            OutboxEventRow.aggregate_type == "run_command",
-                            OutboxEventRow.published_at.is_(None),
+                    (
+                        await session.execute(
+                            select(OutboxEventRow)
+                            .where(
+                                OutboxEventRow.aggregate_type == "run_command",
+                                OutboxEventRow.published_at.is_(None),
+                            )
+                            .order_by(OutboxEventRow.created_at.asc())
+                            .with_for_update(skip_locked=True)
+                            .limit(self._batch_size)
                         )
-                        .order_by(OutboxEventRow.created_at.asc())
-                        .with_for_update(skip_locked=True)
-                        .limit(self._batch_size)
                     )
-                ).scalars().all()
+                    .scalars()
+                    .all()
+                )
                 for row in rows:
-                    command = run_command_from_document(
-                        cast(JsonObject, row.payload)
-                    )
+                    command = run_command_from_document(cast(JsonObject, row.payload))
                     await self._queue.publish(command)
                     row.published_at = datetime.now(UTC)
                     published += 1

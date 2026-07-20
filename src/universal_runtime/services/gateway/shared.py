@@ -15,9 +15,7 @@ _WORKER_ROUTE_PATHS = {"/internal/workers", "/internal/workers/register"}
 
 def attach_postgres_control_plane(app: FastAPI) -> FastAPI:
     """Replace process-local worker routes with the HA PostgreSQL control plane."""
-    database_url = os.environ.get("UR_PLATFORM_DATABASE_URL") or os.environ.get(
-        "UR_DATABASE_URL"
-    )
+    database_url = os.environ.get("UR_PLATFORM_DATABASE_URL") or os.environ.get("UR_DATABASE_URL")
     if not database_url:
         raise RuntimeError(
             "Gateway control plane requires UR_PLATFORM_DATABASE_URL or UR_DATABASE_URL"
@@ -57,9 +55,7 @@ def create_shared_gateway_app() -> FastAPI:
     Worker/standalone processes. The Gateway owns platform metadata, execution
     records and HA worker registration only.
     """
-    if os.environ.get("UR_APPLICATION_ENTRYPOINT") or os.environ.get(
-        "UR_APPLICATION_ENTRYPOINTS"
-    ):
+    if os.environ.get("UR_APPLICATION_ENTRYPOINT") or os.environ.get("UR_APPLICATION_ENTRYPOINTS"):
         raise RuntimeError(
             "shared Gateway must not receive UR_APPLICATION_ENTRYPOINT(S); "
             "configure entrypoints only on Worker or standalone deployments"

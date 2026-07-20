@@ -52,15 +52,19 @@ class PostgresWorkerRegistry:
 
     async def _reclaim_expired_leases(self, session: AsyncSession, now: datetime) -> int:
         leases = (
-            await session.execute(
-                select(WorkerLeaseRow)
-                .where(
-                    WorkerLeaseRow.acknowledged_at.is_(None),
-                    WorkerLeaseRow.expires_at <= now,
+            (
+                await session.execute(
+                    select(WorkerLeaseRow)
+                    .where(
+                        WorkerLeaseRow.acknowledged_at.is_(None),
+                        WorkerLeaseRow.expires_at <= now,
+                    )
+                    .with_for_update(skip_locked=True)
                 )
-                .with_for_update(skip_locked=True)
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         reclaimed = 0
         for lease in leases:
             lease.acknowledged_at = now
@@ -175,25 +179,31 @@ class PostgresWorkerRegistry:
     ) -> tuple[WorkerRegistration, ...]:
         async with self._sessions() as session:
             rows = (
-                await session.execute(
-                    select(WorkerRow)
-                    .where(
-                        WorkerRow.deployment_id == str(deployment_id),
-                        WorkerRow.status.in_([
-                            WorkerStatus.READY.value,
-                            WorkerStatus.BUSY.value,
-                        ]),
-                        WorkerRow.available_slots > 0,
-                        WorkerRow.expires_at > now,
-                        WorkerRow.graph_ids.contains([graph_id]),
-                    )
-                    .order_by(
-                        WorkerRow.available_slots.desc(),
-                        WorkerRow.active_executions.asc(),
-                        WorkerRow.worker_id.asc(),
+                (
+                    await session.execute(
+                        select(WorkerRow)
+                        .where(
+                            WorkerRow.deployment_id == str(deployment_id),
+                            WorkerRow.status.in_(
+                                [
+                                    WorkerStatus.READY.value,
+                                    WorkerStatus.BUSY.value,
+                                ]
+                            ),
+                            WorkerRow.available_slots > 0,
+                            WorkerRow.expires_at > now,
+                            WorkerRow.graph_ids.contains([graph_id]),
+                        )
+                        .order_by(
+                            WorkerRow.available_slots.desc(),
+                            WorkerRow.active_executions.asc(),
+                            WorkerRow.worker_id.asc(),
+                        )
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             return tuple(self._domain(row) for row in rows)
 
     async def acquire(
@@ -231,10 +241,12 @@ class PostgresWorkerRegistry:
                         select(WorkerRow)
                         .where(
                             WorkerRow.deployment_id == str(deployment_id),
-                            WorkerRow.status.in_([
-                                WorkerStatus.READY.value,
-                                WorkerStatus.BUSY.value,
-                            ]),
+                            WorkerRow.status.in_(
+                                [
+                                    WorkerStatus.READY.value,
+                                    WorkerStatus.BUSY.value,
+                                ]
+                            ),
                             WorkerRow.available_slots > 0,
                             WorkerRow.expires_at > now,
                             WorkerRow.graph_ids.contains([graph_id]),
@@ -360,4 +372,4 @@ class PostgresWorkerRegistry:
                     )
                     .values(status=WorkerStatus.OFFLINE.value, available_slots=0)
                 )
-                return reclaimed + int(result.rowcount or 0)
+                return reclaimed + int(getattr(result, "rowcount", 0) or 0)

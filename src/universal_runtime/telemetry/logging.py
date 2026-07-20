@@ -19,9 +19,6 @@ def configure_logging() -> None:
         level = getattr(logging, level_name, logging.INFO)
         logging.basicConfig(
             level=level,
-            format=(
-                "%(asctime)s %(levelname)s %(name)s "
-                "runtime_instance=%(process)d %(message)s"
-            ),
+            format=("%(asctime)s %(levelname)s %(name)s runtime_instance=%(process)d %(message)s"),
         )
         _CONFIGURED = True

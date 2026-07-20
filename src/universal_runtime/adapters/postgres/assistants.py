@@ -170,38 +170,43 @@ class PostgresGatewayAssistantRepository:
     async def all(self) -> tuple[Assistant, ...]:
         async with self._sessions() as session:
             ids = (
-                await session.execute(
-                    select(AssistantRow.id)
-                    .join(ApplicationRow, ApplicationRow.id == AssistantRow.application_id)
-                    .where(
-                        ApplicationRow.workspace_id == str(self._workspace_id),
-                        ApplicationRow.project_id == str(self._project_id),
+                (
+                    await session.execute(
+                        select(AssistantRow.id)
+                        .join(ApplicationRow, ApplicationRow.id == AssistantRow.application_id)
+                        .where(
+                            ApplicationRow.workspace_id == str(self._workspace_id),
+                            ApplicationRow.project_id == str(self._project_id),
+                        )
+                        .order_by(AssistantRow.created_at.desc())
                     )
-                    .order_by(AssistantRow.created_at.desc())
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
         return tuple([await self.get(str(assistant_id)) for assistant_id in ids])
 
     async def versions(self, assistant_id: str) -> tuple[Assistant, ...]:
         current, _ = await self._row(assistant_id)
         async with self._sessions() as session:
             versions = (
-                await session.execute(
-                    select(AssistantVersionRow)
-                    .where(AssistantVersionRow.assistant_id == str(assistant_id))
-                    .order_by(AssistantVersionRow.version.desc())
+                (
+                    await session.execute(
+                        select(AssistantVersionRow)
+                        .where(AssistantVersionRow.assistant_id == str(assistant_id))
+                        .order_by(AssistantVersionRow.version.desc())
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
         return tuple(self._domain(current, version) for version in versions)
 
     async def update(self, assistant_id: str, assistant: Assistant) -> Assistant:
         current, _ = await self._row(assistant_id)
         await self._validate_graph(current.application_id, assistant.graph_id)
         metadata_application = assistant.metadata.get("runtime.application_id")
-        if (
-            metadata_application is not None
-            and str(metadata_application) != current.application_id
-        ):
+        if metadata_application is not None and str(metadata_application) != current.application_id:
             raise RuntimeFailure(
                 ErrorCode.INVALID_EXECUTION_INPUT,
                 "assistant cannot move between applications",
@@ -257,12 +262,16 @@ class PostgresGatewayAssistantRepository:
         async with self._sessions() as session:
             async with session.begin():
                 versions = (
-                    await session.execute(
-                        select(AssistantVersionRow).where(
-                            AssistantVersionRow.assistant_id == str(assistant_id)
+                    (
+                        await session.execute(
+                            select(AssistantVersionRow).where(
+                                AssistantVersionRow.assistant_id == str(assistant_id)
+                            )
                         )
                     )
-                ).scalars().all()
+                    .scalars()
+                    .all()
+                )
                 for version in versions:
                     await session.delete(version)
                 row = await session.get(AssistantRow, str(assistant_id))
