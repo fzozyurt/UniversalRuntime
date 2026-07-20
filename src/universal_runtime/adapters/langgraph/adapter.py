@@ -8,7 +8,10 @@ from typing import Any
 from universal_runtime.adapters.langgraph.config_mapper import map_config
 from universal_runtime.adapters.langgraph.descriptor import LangGraphDescriptor
 from universal_runtime.adapters.langgraph.detector import detect_graph
-from universal_runtime.adapters.langgraph.errors import LangGraphAdapterError, LangGraphErrorCode
+from universal_runtime.adapters.langgraph.errors import (
+    LangGraphAdapterError,
+    LangGraphErrorCode,
+)
 from universal_runtime.adapters.langgraph.interrupt_adapter import resume_command
 from universal_runtime.adapters.langgraph.loader import load_graph
 from universal_runtime.adapters.langgraph.manifest import langgraph_manifest
@@ -17,7 +20,10 @@ from universal_runtime.adapters.langgraph.persistence import (
     local_persistence,
     validate_persistence,
 )
-from universal_runtime.adapters.langgraph.state_adapter import get_state, get_state_history
+from universal_runtime.adapters.langgraph.state_adapter import (
+    get_state,
+    get_state_history,
+)
 from universal_runtime.adapters.langgraph.stream_mapper import map_stream
 from universal_runtime.domain.capabilities import (
     AdapterCapabilities,
@@ -26,6 +32,16 @@ from universal_runtime.domain.capabilities import (
 )
 from universal_runtime.domain.events import RuntimeEventDraft, RuntimeEventType
 from universal_runtime.domain.execution import ExecutionRequest
+
+
+def _graph_json(value: Any) -> dict[str, Any]:
+    raw = value.to_json()
+    if not isinstance(raw, dict):
+        raise LangGraphAdapterError(
+            LangGraphErrorCode.INVALID_GRAPH,
+            "LangGraph inspection did not return a JSON object",
+        )
+    return {str(key): item for key, item in raw.items()}
 
 
 class LangGraphAdapter:
@@ -37,7 +53,10 @@ class LangGraphAdapter:
         providers: PersistenceProviders | None = None,
     ) -> None:
         source_descriptor = detect_graph(target)
-        validate_persistence(persistence_mode, has_checkpointer=source_descriptor.has_checkpointer)
+        validate_persistence(
+            persistence_mode,
+            has_checkpointer=source_descriptor.has_checkpointer,
+        )
         selected = providers or (
             local_persistence("platform-managed")
             if persistence_mode == "platform-managed"
@@ -45,24 +64,48 @@ class LangGraphAdapter:
         )
         self._persistence_mode = persistence_mode
         self._providers = selected
-        self._graph = load_graph(target, checkpointer=selected.checkpointer, store=selected.store)
+        self._graph = load_graph(
+            target,
+            checkpointer=selected.checkpointer,
+            store=selected.store,
+        )
         self._descriptor: LangGraphDescriptor = detect_graph(self._graph)
         self._manifest = self._manifest_for_graph(
-            langgraph_manifest(session_affinity=selected.session_affinity)
+            langgraph_manifest(
+                session_affinity=selected.session_affinity
+            )
         )
         self._tasks: dict[str, asyncio.Task[Any]] = {}
 
-    def _manifest_for_graph(self, manifest: AdapterManifest) -> AdapterManifest:
+    def _manifest_for_graph(
+        self,
+        manifest: AdapterManifest,
+    ) -> AdapterManifest:
         capabilities = manifest.capabilities
         persistence_enabled = self._descriptor.has_checkpointer and (
-            self._persistence_mode != "disabled" or self._providers.provider != "disabled"
+            self._persistence_mode != "disabled"
+            or self._providers.provider != "disabled"
         )
-        has_state = persistence_enabled and hasattr(self._graph, "aget_state")
-        has_history = persistence_enabled and hasattr(self._graph, "aget_state_history")
-        has_update = persistence_enabled and hasattr(self._graph, "aupdate_state")
+        has_state = persistence_enabled and hasattr(
+            self._graph,
+            "aget_state",
+        )
+        has_history = persistence_enabled and hasattr(
+            self._graph,
+            "aget_state_history",
+        )
+        has_update = persistence_enabled and hasattr(
+            self._graph,
+            "aupdate_state",
+        )
         affinity = manifest.session_affinity
-        if self._persistence_mode == "application-managed" and self._descriptor.has_checkpointer:
-            checkpoint_module = type(getattr(self._graph, "checkpointer", None)).__module__
+        if (
+            self._persistence_mode == "application-managed"
+            and self._descriptor.has_checkpointer
+        ):
+            checkpoint_module = type(
+                getattr(self._graph, "checkpointer", None)
+            ).__module__
             affinity = (
                 SessionAffinity.REQUIRED
                 if "checkpoint.memory" in checkpoint_module
@@ -94,18 +137,27 @@ class LangGraphAdapter:
     def descriptor(self) -> LangGraphDescriptor:
         return self._descriptor
 
-    async def inspect(self, target: Any | None = None) -> LangGraphDescriptor:
+    async def inspect(
+        self,
+        target: Any | None = None,
+    ) -> LangGraphDescriptor:
         return detect_graph(self._graph if target is None else target)
 
     async def get_graph(self, *, xray: bool = False) -> dict[str, Any]:
-        graph = self._graph.get_graph(xray=xray)
-        return graph.to_json()
+        return _graph_json(self._graph.get_graph(xray=xray))
 
-    async def get_subgraphs(self, *, xray: bool = False) -> dict[str, Any]:
-        del xray
+    async def get_subgraphs(
+        self,
+        *,
+        xray: bool = False,
+    ) -> dict[str, Any]:
         result: dict[str, Any] = {}
-        async for namespace, subgraph in self._graph.aget_subgraphs(recurse=True):
-            result[namespace] = subgraph.get_graph().to_json()
+        async for namespace, subgraph in self._graph.aget_subgraphs(
+            recurse=True
+        ):
+            result[str(namespace)] = _graph_json(
+                subgraph.get_graph(xray=xray)
+            )
         return result
 
     async def invoke(self, request: ExecutionRequest) -> Any:
@@ -117,7 +169,11 @@ class LangGraphAdapter:
         kwargs: dict[str, Any] = {"config": config}
         if request.context:
             kwargs["context"] = request.context
-        payload = request.command if request.command is not None else request.input
+        payload = (
+            request.command
+            if request.command is not None
+            else request.input
+        )
         try:
             try:
                 return await self._graph.ainvoke(payload, **kwargs)
@@ -129,7 +185,10 @@ class LangGraphAdapter:
         finally:
             self._tasks.pop(key, None)
 
-    async def stream(self, request: ExecutionRequest) -> AsyncIterator[RuntimeEventDraft]:
+    async def stream(
+        self,
+        request: ExecutionRequest,
+    ) -> AsyncIterator[RuntimeEventDraft]:
         task = asyncio.current_task()
         key = str(request.identity.run_id)
         if task is not None:
@@ -137,17 +196,25 @@ class LangGraphAdapter:
         config = map_config(request)
         kwargs: dict[str, Any] = {
             "config": config,
-            "stream_mode": list(request.stream_modes)
-            if len(request.stream_modes) > 1
-            else request.stream_modes[0],
+            "stream_mode": (
+                list(request.stream_modes)
+                if len(request.stream_modes) > 1
+                else request.stream_modes[0]
+            ),
         }
         if request.stream_subgraphs:
             kwargs["subgraphs"] = True
         if request.context:
             kwargs["context"] = request.context
-        payload = request.command if request.command is not None else request.input
+        payload = (
+            request.command
+            if request.command is not None
+            else request.input
+        )
         yield RuntimeEventDraft(
-            request.identity, RuntimeEventType.RUN_STARTED, data={"run_id": key}
+            request.identity,
+            RuntimeEventType.RUN_STARTED,
+            data={"run_id": key},
         )
         interrupted = False
         try:
@@ -183,7 +250,8 @@ class LangGraphAdapter:
                     else payload
                 )
                 async for event in map_stream(
-                    self._graph.astream(stream_payload, **kwargs), request
+                    self._graph.astream(stream_payload, **kwargs),
+                    request,
                 ):
                     yield event
                     if (
@@ -201,7 +269,9 @@ class LangGraphAdapter:
                         )
         except asyncio.CancelledError:
             yield RuntimeEventDraft(
-                request.identity, RuntimeEventType.RUN_CANCELLED, data={"run_id": key}
+                request.identity,
+                RuntimeEventType.RUN_CANCELLED,
+                data={"run_id": key},
             )
             raise
         except Exception as exc:
@@ -220,7 +290,9 @@ class LangGraphAdapter:
                 )
             else:
                 yield RuntimeEventDraft(
-                    request.identity, RuntimeEventType.RUN_COMPLETED, data={"run_id": key}
+                    request.identity,
+                    RuntimeEventType.RUN_COMPLETED,
+                    data={"run_id": key},
                 )
         finally:
             self._tasks.pop(key, None)
@@ -239,42 +311,68 @@ class LangGraphAdapter:
     async def get_state(self, request: ExecutionRequest) -> Any:
         if not self._manifest.capabilities.state_management:
             raise LangGraphAdapterError(
-                LangGraphErrorCode.CAPABILITY_NOT_SUPPORTED, "state is not supported"
+                LangGraphErrorCode.CAPABILITY_NOT_SUPPORTED,
+                "state is not supported",
             )
         return await get_state(self._graph, map_config(request))
 
     async def get_state_history(self, request: ExecutionRequest) -> Any:
         if not self._manifest.capabilities.history:
             raise LangGraphAdapterError(
-                LangGraphErrorCode.CAPABILITY_NOT_SUPPORTED, "state history is not supported"
+                LangGraphErrorCode.CAPABILITY_NOT_SUPPORTED,
+                "state history is not supported",
             )
-        return await get_state_history(self._graph, map_config(request))
+        return await get_state_history(
+            self._graph,
+            map_config(request),
+        )
 
-    async def update_state(self, request: ExecutionRequest, values: Any) -> Any:
+    async def update_state(
+        self,
+        request: ExecutionRequest,
+        values: Any,
+    ) -> Any:
         if not self._manifest.capabilities.state_management or not hasattr(
-            self._graph, "aupdate_state"
+            self._graph,
+            "aupdate_state",
         ):
             raise LangGraphAdapterError(
-                LangGraphErrorCode.CAPABILITY_NOT_SUPPORTED, "state update is not supported"
+                LangGraphErrorCode.CAPABILITY_NOT_SUPPORTED,
+                "state update is not supported",
             )
-        return await self._graph.aupdate_state(map_config(request), values)
+        return await self._graph.aupdate_state(
+            map_config(request),
+            values,
+        )
 
-    async def resume(self, request: ExecutionRequest, value: Any) -> Any:
+    async def resume(
+        self,
+        request: ExecutionRequest,
+        value: Any,
+    ) -> Any:
         if not self._manifest.capabilities.resume:
             raise LangGraphAdapterError(
-                LangGraphErrorCode.CAPABILITY_NOT_SUPPORTED, "resume is not supported"
+                LangGraphErrorCode.CAPABILITY_NOT_SUPPORTED,
+                "resume is not supported",
             )
         if request.identity.thread_id is None:
             raise LangGraphAdapterError(
-                LangGraphErrorCode.INVALID_GRAPH, "resume requires a thread"
+                LangGraphErrorCode.INVALID_GRAPH,
+                "resume requires a thread",
             )
         kwargs: dict[str, Any] = {"config": map_config(request)}
         if request.context:
             kwargs["context"] = request.context
         try:
-            return await self._graph.ainvoke(resume_command(value), **kwargs)
+            return await self._graph.ainvoke(
+                resume_command(value),
+                **kwargs,
+            )
         except TypeError as exc:
             if "context" not in str(exc):
                 raise
             kwargs.pop("context", None)
-            return await self._graph.ainvoke(resume_command(value), **kwargs)
+            return await self._graph.ainvoke(
+                resume_command(value),
+                **kwargs,
+            )
