@@ -16,7 +16,7 @@ class LauncherConfig:
     worker_drain_timeout_seconds: float
     instance_id: str
     database_url: str | None
-    kafka_bootstrap_servers: str | None
+    kafka_bootstrap_servers: str
     topic_prefix: str
     kafka_environment: str
     observability_enabled: bool
@@ -54,7 +54,8 @@ class LauncherConfig:
                 or values.get("UR_DATABASE_URL")
             ),
             kafka_bootstrap_servers=values.get(
-                "UR_KAFKA_BOOTSTRAP_SERVERS"
+                "UR_KAFKA_BOOTSTRAP_SERVERS",
+                "kafka:9092",
             ),
             topic_prefix=values.get(
                 "UR_TOPIC_PREFIX",
@@ -76,11 +77,6 @@ class LauncherConfig:
                 "UR_PLATFORM_DATABASE_URL or UR_DATABASE_URL is required"
             )
         return self.database_url
-
-    def require_kafka_bootstrap_servers(self) -> str:
-        if not self.kafka_bootstrap_servers:
-            raise ValueError("UR_KAFKA_BOOTSTRAP_SERVERS is required")
-        return self.kafka_bootstrap_servers
 
     def validate(self) -> None:
         if self.mode not in {
