@@ -56,6 +56,7 @@ async def _serve(config: LauncherConfig) -> None:
     )
     persistence = await persistence_context.__aenter__()
     adapters: dict[str, LangGraphAdapter] = {}
+    graph_entrypoints: dict[str, str] = {}
     for entrypoint in entrypoints:
         module_name, attribute = entrypoint.split(":", 1)
         target = getattr(importlib.import_module(module_name), attribute)
@@ -68,11 +69,20 @@ async def _serve(config: LauncherConfig) -> None:
         if graph_id in adapters:
             raise RuntimeError(f"duplicate graph_id in application image: {graph_id}")
         adapters[graph_id] = adapter
+        graph_entrypoints[graph_id] = entrypoint
 
     server = create_server(adapters)
     await server.start_listening(config.grpc_host, config.grpc_port)
-    await _publish_registration(adapters, server, config, attempts=10)
-    heartbeat_task = asyncio.create_task(_registration_loop(adapters, server, config))
+    await _publish_registration(
+        adapters,
+        graph_entrypoints,
+        server,
+        config,
+        attempts=10,
+    )
+    heartbeat_task = asyncio.create_task(
+        _registration_loop(adapters, graph_entrypoints, server, config)
+    )
     stopped = asyncio.Event()
     loop = asyncio.get_running_loop()
     loop.add_signal_handler(signal.SIGTERM, stopped.set)
@@ -85,6 +95,7 @@ async def _serve(config: LauncherConfig) -> None:
         try:
             await _publish_registration(
                 adapters,
+                graph_entrypoints,
                 server,
                 config,
                 status_override="draining",
@@ -98,30 +109,55 @@ async def _serve(config: LauncherConfig) -> None:
 
 
 async def _registration_loop(
-    adapters: dict[str, LangGraphAdapter], server: WorkerServer, config: LauncherConfig
+    adapters: dict[str, LangGraphAdapter],
+    graph_entrypoints: dict[str, str],
+    server: WorkerServer,
+    config: LauncherConfig,
 ) -> None:
     interval = max(1, int(os.environ.get("UR_WORKER_HEARTBEAT_SECONDS", "10")))
     while True:
         await asyncio.sleep(interval)
         try:
-            await _publish_registration(adapters, server, config, attempts=3)
+            await _publish_registration(
+                adapters,
+                graph_entrypoints,
+                server,
+                config,
+                attempts=3,
+            )
         except asyncio.CancelledError:
             raise
         except Exception:
-            # Registration TTL and repeated heartbeats make temporary Gateway outages
-            # recoverable. The Worker must keep serving already leased runs.
             _LOGGER.exception("worker heartbeat publication failed")
+
+
+def _graph_descriptors(
+    adapters: dict[str, LangGraphAdapter],
+    graph_entrypoints: dict[str, str],
+) -> list[dict[str, object]]:
+    return [
+        {
+            "graph_id": graph_id,
+            "entrypoint": graph_entrypoints[graph_id],
+            "descriptor": {
+                **asdict(adapter.descriptor),
+                "entrypoint": graph_entrypoints[graph_id],
+            },
+        }
+        for graph_id, adapter in sorted(adapters.items())
+    ]
 
 
 async def _publish_registration(
     adapters: dict[str, LangGraphAdapter],
+    graph_entrypoints: dict[str, str],
     server: WorkerServer,
     config: LauncherConfig,
     *,
     status_override: str | None = None,
     attempts: int,
 ) -> None:
-    """Advertise one application deployment replica and its current capacity."""
+    """Advertise one immutable application revision and current replica capacity."""
     url = os.environ.get("UR_GATEWAY_REGISTER_URL")
     if not url:
         return
@@ -141,6 +177,7 @@ async def _publish_registration(
         "busy" if server.worker.available_slots == 0 else "ready"
     )
     available_slots = 0 if status == "draining" else server.worker.available_slots
+    revision_id = os.environ.get("UR_REVISION_ID", "active")
     payload = {
         "worker_id": os.environ.get("UR_INSTANCE_ID", "worker"),
         "target": target,
@@ -148,10 +185,18 @@ async def _publish_registration(
         "workspace_id": os.environ.get("UR_WORKSPACE_ID", "default"),
         "project_id": os.environ.get("UR_PROJECT_ID", "default"),
         "application_id": os.environ.get("UR_APPLICATION_ID", "default"),
-        "revision_id": os.environ.get("UR_REVISION_ID", "active"),
+        "application_name": os.environ.get("UR_APPLICATION_NAME", "runtime-application"),
+        "revision_id": revision_id,
         "deployment_id": os.environ.get("UR_DEPLOYMENT_ID", "local"),
+        "environment": os.environ.get("UR_KAFKA_ENVIRONMENT", "local"),
+        "image_digest": os.environ.get("UR_IMAGE_DIGEST", f"local:{revision_id}"),
         "graph_ids": sorted(adapters),
+        "graphs": _graph_descriptors(adapters, graph_entrypoints),
         "manifests": manifests,
+        "revision_metadata": {
+            "source": os.environ.get("UR_SOURCE_REVISION", revision_id),
+            "runtime_version": "0.1.0",
+        },
         "max_concurrency": server.worker.max_concurrency,
         "active_executions": server.worker.active_executions,
         "available_slots": available_slots,
