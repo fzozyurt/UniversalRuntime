@@ -7,7 +7,9 @@ from enum import StrEnum
 from universal_runtime.domain.identity import (
     ApplicationId,
     DeploymentId,
+    LeaseId,
     RevisionId,
+    RunId,
     WorkerId,
 )
 from universal_runtime.domain.primitives.json_types import JsonObject
@@ -58,3 +60,19 @@ class WorkerRegistration:
             and self.available_slots > 0
             and self.expires_at > now
         )
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerLease:
+    lease_id: LeaseId
+    worker_id: WorkerId
+    run_id: RunId
+    grpc_target: str
+    expires_at: datetime
+
+    def __post_init__(self) -> None:
+        if not self.grpc_target.strip():
+            raise ValueError("worker lease grpc_target must not be empty")
+
+    def is_active(self, now: datetime) -> bool:
+        return self.expires_at > now
