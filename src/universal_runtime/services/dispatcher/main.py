@@ -5,15 +5,15 @@ import logging
 import os
 import signal
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 import grpc
-from google.protobuf import struct_pb2
 
-from universal_runtime.adapters.grpc.generated.runtime.v1 import execution_pb2, execution_pb2_grpc
-from universal_runtime.adapters.grpc.payloads import python_to_value, value_to_python
+from universal_runtime.adapters.grpc.execution_client import GrpcExecutionClient
 from universal_runtime.adapters.kafka import AioKafkaRunCommandQueue, TopicNames
-from universal_runtime.adapters.postgres.database import create_engine, create_session_factory
+from universal_runtime.adapters.postgres.database import (
+    create_engine,
+    create_session_factory,
+)
 from universal_runtime.adapters.postgres.events import PostgresEventJournal
 from universal_runtime.adapters.postgres.repositories import (
     PostgresRunRepository,
@@ -23,8 +23,14 @@ from universal_runtime.adapters.postgres.workers import PostgresWorkerRegistry
 from universal_runtime.bootstrap.runtime_config import LauncherConfig
 from universal_runtime.domain.errors import ErrorCode, RuntimeFailure
 from universal_runtime.domain.events import RuntimeEventDraft, RuntimeEventType
-from universal_runtime.domain.execution import RunError, RunStatus
-from universal_runtime.domain.identity import ExecutionIdentity, WorkerId
+from universal_runtime.domain.execution import (
+    Run,
+    RunCommandReceipt,
+    RunError,
+    RunStatus,
+)
+from universal_runtime.domain.identity import WorkerId
+from universal_runtime.domain.primitives.json_types import JsonValue
 from universal_runtime.domain.workers import WorkerLease
 
 _LOGGER = logging.getLogger(__name__)
@@ -35,6 +41,13 @@ _TERMINAL_RUN_STATUSES = {
     RunStatus.CANCELLED,
     RunStatus.INTERRUPTED,
 }
+_TERMINAL_EVENT_TYPES = {
+    RuntimeEventType.RUN_COMPLETED,
+    RuntimeEventType.RUN_FAILED,
+    RuntimeEventType.RUN_CANCELLED,
+    RuntimeEventType.RUN_INTERRUPTED,
+    RuntimeEventType.RUN_TIMEOUT,
+}
 _RETRYABLE_GRPC_CODES = {
     grpc.StatusCode.UNAVAILABLE,
     grpc.StatusCode.DEADLINE_EXCEEDED,
@@ -44,49 +57,12 @@ _RETRYABLE_GRPC_CODES = {
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
-def _struct(values: dict[str, Any]) -> struct_pb2.Struct:
-    result = struct_pb2.Struct()
-    result.update(values)
-    return result
-
-
-def _identity(identity: ExecutionIdentity) -> execution_pb2.ExecutionIdentity:
-    return execution_pb2.ExecutionIdentity(
-        workspace_id=str(identity.workspace_id),
-        project_id=str(identity.project_id),
-        application_id=str(identity.application_id),
-        revision_id=str(identity.revision_id),
-        deployment_id=str(identity.deployment_id),
-        assistant_id=str(identity.assistant_id),
-        thread_id=str(identity.thread_id) if identity.thread_id else "",
-        run_id=str(identity.run_id),
-        attempt_id=str(identity.attempt_id),
-    )
-
-
-def _invocation(command: Any) -> execution_pb2.InvokeRequest:
-    request = command.request
-    return execution_pb2.InvokeRequest(
-        identity=_identity(command.identity),
-        target=execution_pb2.ExecutionTarget(
-            graph_id=request.target.graph_id,
-            assistant_version=request.target.assistant_version,
-        ),
-        input=python_to_value(request.input),
-        command=python_to_value(request.command),
-        config=_struct(request.config),
-        context=_struct(request.context),
-        metadata=_struct(request.metadata),
-        stream_modes=list(request.stream_modes),
-        stream_subgraphs=request.stream_subgraphs,
-        priority=int(request.priority),
-        timeout_seconds=request.timeout_seconds,
-    )
-
-
 def _retryable(exc: BaseException) -> bool:
     if isinstance(exc, RuntimeFailure):
-        return exc.retryable or exc.code is ErrorCode.INFRASTRUCTURE_UNAVAILABLE
+        return (
+            exc.retryable
+            or exc.code is ErrorCode.INFRASTRUCTURE_UNAVAILABLE
+        )
     if isinstance(exc, grpc.aio.AioRpcError):
         return exc.code() in _RETRYABLE_GRPC_CODES
     return isinstance(exc, (ConnectionError, OSError, TimeoutError))
@@ -95,11 +71,14 @@ def _retryable(exc: BaseException) -> bool:
 class Dispatcher:
     def __init__(self) -> None:
         self.config = LauncherConfig.from_environment()
-        database_url = os.environ.get("UR_PLATFORM_DATABASE_URL") or os.environ["UR_DATABASE_URL"]
         self.engine = create_engine(
-            database_url,
-            pool_size=int(os.environ.get("UR_DISPATCHER_DB_POOL_SIZE", "5")),
-            max_overflow=int(os.environ.get("UR_DISPATCHER_DB_MAX_OVERFLOW", "5")),
+            self.config.require_database_url(),
+            pool_size=int(
+                os.environ.get("UR_DISPATCHER_DB_POOL_SIZE", "5")
+            ),
+            max_overflow=int(
+                os.environ.get("UR_DISPATCHER_DB_MAX_OVERFLOW", "5")
+            ),
         )
         sessions = create_session_factory(self.engine)
         self.runs = PostgresRunRepository(sessions)
@@ -113,16 +92,23 @@ class Dispatcher:
         self.queue = AioKafkaRunCommandQueue(
             bootstrap_servers=self.config.kafka_bootstrap_servers,
             topics=topics,
-            group_id=os.environ.get("UR_DISPATCHER_GROUP_ID", "runtime.dispatcher"),
+            group_id=os.environ.get(
+                "UR_DISPATCHER_GROUP_ID",
+                "runtime.dispatcher",
+            ),
         )
-        self._channels: dict[str, grpc.aio.Channel] = {}
+        self.execution_client = GrpcExecutionClient()
         self._fallback_targets = tuple(
             target.strip()
             for target in os.environ.get("UR_WORKER_TARGETS", "").split(",")
             if target.strip()
         )
         self._allow_static_fallback = (
-            os.environ.get("UR_ALLOW_STATIC_WORKER_FALLBACK", "false").lower() in _TRUE_VALUES
+            os.environ.get(
+                "UR_ALLOW_STATIC_WORKER_FALLBACK",
+                "false",
+            ).lower()
+            in _TRUE_VALUES
         )
         self._fallback_index = 0
         self._max_attempts = max(
@@ -131,15 +117,30 @@ class Dispatcher:
         )
         self._retry_base_seconds = max(
             0.05,
-            float(os.environ.get("UR_DISPATCH_RETRY_BASE_SECONDS", "0.5")),
+            float(
+                os.environ.get(
+                    "UR_DISPATCH_RETRY_BASE_SECONDS",
+                    "0.5",
+                )
+            ),
         )
         self._retry_max_seconds = max(
             self._retry_base_seconds,
-            float(os.environ.get("UR_DISPATCH_RETRY_MAX_SECONDS", "10")),
+            float(
+                os.environ.get(
+                    "UR_DISPATCH_RETRY_MAX_SECONDS",
+                    "10",
+                )
+            ),
         )
         self._lease_grace_seconds = max(
             30,
-            int(os.environ.get("UR_WORKER_LEASE_GRACE_SECONDS", "60")),
+            int(
+                os.environ.get(
+                    "UR_WORKER_LEASE_GRACE_SECONDS",
+                    "60",
+                )
+            ),
         )
 
     async def run(self, stop: asyncio.Event) -> None:
@@ -155,12 +156,19 @@ class Dispatcher:
 
     @staticmethod
     def _dispatcher_id() -> WorkerId:
-        return WorkerId.parse(os.environ.get("UR_INSTANCE_ID", "dispatcher"))
+        return WorkerId.parse(
+            os.environ.get("UR_INSTANCE_ID", "dispatcher")
+        )
 
-    async def _acquire_worker(self, receipt: Any) -> tuple[str, WorkerLease | None]:
+    async def _acquire_worker(
+        self,
+        receipt: RunCommandReceipt,
+    ) -> tuple[str, WorkerLease | None]:
         request = receipt.command.request
         now = datetime.now(UTC)
-        expires_at = now + timedelta(seconds=request.timeout_seconds + self._lease_grace_seconds)
+        expires_at = now + timedelta(
+            seconds=request.timeout_seconds + self._lease_grace_seconds
+        )
         try:
             lease = await self.workers.acquire(
                 receipt.identity.deployment_id,
@@ -171,22 +179,34 @@ class Dispatcher:
             )
             return lease.grpc_target, lease
         except RuntimeFailure:
-            if not self._allow_static_fallback or not self._fallback_targets:
+            if (
+                not self._allow_static_fallback
+                or not self._fallback_targets
+            ):
                 raise
-            target = self._fallback_targets[self._fallback_index % len(self._fallback_targets)]
+            target = self._fallback_targets[
+                self._fallback_index % len(self._fallback_targets)
+            ]
             self._fallback_index += 1
             _LOGGER.warning(
-                "using explicitly enabled static worker fallback run_id=%s target=%s",
+                "using explicitly enabled static worker fallback "
+                "run_id=%s target=%s",
                 receipt.identity.run_id,
                 target,
             )
             return target, None
 
-    async def _release_worker(self, lease: WorkerLease | None) -> None:
+    async def _release_worker(
+        self,
+        lease: WorkerLease | None,
+    ) -> None:
         if lease is None:
             return
         try:
-            await self.workers.release(lease.lease_id, now=datetime.now(UTC))
+            await self.workers.release(
+                lease.lease_id,
+                now=datetime.now(UTC),
+            )
         except Exception:
             _LOGGER.exception(
                 "worker lease release failed lease_id=%s run_id=%s",
@@ -194,20 +214,21 @@ class Dispatcher:
                 lease.run_id,
             )
 
-    def _channel(self, target: str) -> grpc.aio.Channel:
-        channel = self._channels.get(target)
-        if channel is None:
-            channel = grpc.aio.insecure_channel(target)
-            self._channels[target] = channel
-        return channel
-
     def _retry_delay(self, delivery_count: int) -> float:
-        return min(
-            self._retry_base_seconds * (2 ** max(0, delivery_count - 1)),
-            self._retry_max_seconds,
+        return float(
+            min(
+                self._retry_base_seconds
+                * (2 ** max(0, delivery_count - 1)),
+                self._retry_max_seconds,
+            )
         )
 
-    async def _requeue(self, receipt: Any, run: Any, exc: BaseException) -> None:
+    async def _requeue(
+        self,
+        receipt: RunCommandReceipt,
+        run: Run,
+        exc: BaseException,
+    ) -> None:
         current = await self.runs.get(str(run.run_id))
         if current.status is RunStatus.RUNNING:
             await self.runs.update(current.requeue(datetime.now(UTC)))
@@ -225,12 +246,14 @@ class Dispatcher:
             )
         )
         await self.queue.reject(receipt, retryable=True)
-        await asyncio.sleep(self._retry_delay(receipt.delivery_count))
+        await asyncio.sleep(
+            self._retry_delay(receipt.delivery_count)
+        )
 
     async def _fail_terminal(
         self,
-        receipt: Any,
-        run: Any,
+        receipt: RunCommandReceipt,
+        run: Run,
         exc: BaseException,
         *,
         worker_target: str | None,
@@ -255,11 +278,47 @@ class Dispatcher:
                 )
             )
             if current.thread_id is not None:
-                thread = await self.threads.get(str(current.thread_id))
-                await self.threads.update(thread.mark_error(datetime.now(UTC)))
+                thread = await self.threads.get(
+                    str(current.thread_id)
+                )
+                await self.threads.update(
+                    thread.mark_error(datetime.now(UTC))
+                )
         await self.queue.reject(receipt, retryable=False)
 
-    async def _dispatch(self, receipt: Any) -> None:
+    async def _apply_terminal_event(
+        self,
+        run: Run,
+        draft: RuntimeEventDraft,
+        last_result: JsonValue,
+    ) -> None:
+        current = await self.runs.get(str(run.run_id))
+        now = datetime.now(UTC)
+        if draft.type is RuntimeEventType.RUN_COMPLETED:
+            await self.runs.update(current.complete(last_result, now))
+        elif draft.type is RuntimeEventType.RUN_INTERRUPTED:
+            await self.runs.update(current.mark_interrupted(now))
+        elif draft.type is RuntimeEventType.RUN_CANCELLED:
+            await self.runs.update(current.cancel(now))
+        elif draft.type is RuntimeEventType.RUN_TIMEOUT:
+            await self.runs.update(
+                current.fail(
+                    RunError("FRAMEWORK_EXECUTION_TIMEOUT", str(draft.data)),
+                    now,
+                )
+            )
+        else:
+            await self.runs.update(
+                current.fail(
+                    RunError(
+                        "FRAMEWORK_EXECUTION_FAILED",
+                        str(draft.data),
+                    ),
+                    now,
+                )
+            )
+
+    async def _dispatch(self, receipt: RunCommandReceipt) -> None:
         try:
             run = await self.runs.get(str(receipt.identity.run_id))
         except RuntimeFailure as exc:
@@ -274,55 +333,38 @@ class Dispatcher:
         worker_target: str | None = None
         worker_lease: WorkerLease | None = None
         try:
-            worker_target, worker_lease = await self._acquire_worker(receipt)
-            await self.runs.update(run.mark_running(datetime.now(UTC)))
-            stub = execution_pb2_grpc.ExecutionServiceStub(self._channel(worker_target))
+            worker_target, worker_lease = await self._acquire_worker(
+                receipt
+            )
+            await self.runs.update(
+                run.mark_running(datetime.now(UTC))
+            )
             terminal = False
-            last_result: Any = None
-            async for event in stub.Stream(
-                execution_pb2.StreamRequest(invocation=_invocation(receipt.command)),
-                timeout=receipt.command.request.timeout_seconds,
+            last_result: JsonValue = None
+            async for draft in self.execution_client.stream(
+                worker_target,
+                receipt.command,
             ):
-                draft = RuntimeEventDraft(
-                    receipt.identity,
-                    RuntimeEventType(event.type),
-                    tuple(event.namespace),
-                    value_to_python(event.data),
-                    {key: value_to_python(value) for key, value in event.native.fields.items()},
-                )
                 await self.events.append(draft)
-                if event.type == "state.values":
-                    last_result = value_to_python(event.data)
-                if event.type in {
-                    "run.completed",
-                    "run.failed",
-                    "run.cancelled",
-                    "run.interrupted",
-                }:
+                if draft.type is RuntimeEventType.STATE_VALUES:
+                    last_result = draft.data
+                if draft.type in _TERMINAL_EVENT_TYPES:
                     terminal = True
-                    current = await self.runs.get(str(run.run_id))
-                    if event.type == "run.completed":
-                        await self.runs.update(current.complete(last_result, datetime.now(UTC)))
-                    elif event.type == "run.interrupted":
-                        await self.runs.update(current.mark_interrupted(datetime.now(UTC)))
-                    elif event.type == "run.cancelled":
-                        await self.runs.update(current.cancel(datetime.now(UTC)))
-                    else:
-                        await self.runs.update(
-                            current.fail(
-                                RunError(
-                                    "FRAMEWORK_EXECUTION_FAILED",
-                                    str(event.data),
-                                ),
-                                datetime.now(UTC),
-                            )
-                        )
+                    await self._apply_terminal_event(
+                        run,
+                        draft,
+                        last_result,
+                    )
             if not terminal:
                 current = await self.runs.get(str(run.run_id))
-                await self.runs.update(current.complete(last_result, datetime.now(UTC)))
-            if run.thread_id:
+                await self.runs.update(
+                    current.complete(last_result, datetime.now(UTC))
+                )
+            if run.thread_id is not None:
                 thread = await self.threads.get(str(run.thread_id))
-                await self.threads.update(thread.mark_idle(datetime.now(UTC)))
+                await self.threads.update(
+                    thread.mark_idle(datetime.now(UTC))
+                )
             await self.queue.acknowledge(receipt)
         except asyncio.CancelledError as exc:
             await self._release_worker(worker_lease)
@@ -344,9 +386,13 @@ class Dispatcher:
                 return
             await self._release_worker(worker_lease)
             worker_lease = None
-            if _retryable(exc) and receipt.delivery_count < self._max_attempts:
+            if (
+                _retryable(exc)
+                and receipt.delivery_count < self._max_attempts
+            ):
                 _LOGGER.warning(
-                    "retrying run dispatch run_id=%s delivery=%s error=%s",
+                    "retrying run dispatch run_id=%s delivery=%s "
+                    "error=%s",
                     run.run_id,
                     receipt.delivery_count,
                     exc,
@@ -364,8 +410,7 @@ class Dispatcher:
 
     async def close(self) -> None:
         await self.queue.close()
-        for channel in self._channels.values():
-            await channel.close()
+        await self.execution_client.close()
         await self.engine.dispose()
 
 
@@ -389,7 +434,10 @@ def create_dispatch_queue() -> AioKafkaRunCommandQueue:
             prefix=config.topic_prefix,
             environment=config.kafka_environment,
         ),
-        group_id=os.environ.get("UR_DISPATCHER_GROUP_ID", "runtime.dispatcher"),
+        group_id=os.environ.get(
+            "UR_DISPATCHER_GROUP_ID",
+            "runtime.dispatcher",
+        ),
     )
 
 
