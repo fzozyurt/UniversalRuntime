@@ -1,5 +1,8 @@
 from datetime import UTC, datetime
 
+import pytest
+
+from universal_runtime.domain.errors import RuntimeFailure
 from universal_runtime.domain.execution import (
     ExecutionRequest,
     ExecutionTarget,
@@ -65,7 +68,9 @@ def test_run_command_codec_preserves_scope_target_and_execution_options() -> Non
         created_at=timestamp,
     )
 
-    restored = run_command_from_document(run_command_to_document(command))
+    restored = run_command_from_document(
+        run_command_to_document(command)
+    )
 
     assert restored.command_id == command.command_id
     assert restored.identity == identity
@@ -83,3 +88,61 @@ def test_run_command_codec_preserves_scope_target_and_execution_options() -> Non
     assert restored.request.checkpoint_id == "checkpoint-9"
     assert restored.available_at == timestamp
     assert restored.created_at == timestamp
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("stream_modes", ["messages", 4]),
+        ("timeout_seconds", "soon"),
+        ("priority", "interactive"),
+        ("stream_subgraphs", "true"),
+    ],
+)
+def test_run_command_codec_rejects_invalid_request_field(
+    field: str,
+    value: object,
+) -> None:
+    document = {
+        "command_id": "command-1",
+        "identity": {
+            "workspace_id": "workspace",
+            "project_id": "project",
+            "application_id": "application",
+            "revision_id": "revision",
+            "deployment_id": "deployment",
+            "assistant_id": "assistant",
+            "thread_id": None,
+            "run_id": "run-1",
+            "attempt_id": "attempt-1",
+        },
+        "request": {
+            "target": {
+                "graph_id": "graph",
+                "assistant_version": 1,
+            },
+            "stream_modes": ["values"],
+            "stream_subgraphs": False,
+            "priority": 100,
+            "timeout_seconds": 1800,
+        },
+        "priority": 100,
+    }
+    request = document["request"]
+    assert isinstance(request, dict)
+    request[field] = value
+
+    with pytest.raises(RuntimeFailure, match=field):
+        run_command_from_document(document)
+
+
+def test_run_command_codec_rejects_missing_identity_object() -> None:
+    with pytest.raises(RuntimeFailure, match="identity"):
+        run_command_from_document(
+            {
+                "command_id": "command-1",
+                "identity": None,
+                "request": {},
+                "priority": 100,
+            }
+        )
