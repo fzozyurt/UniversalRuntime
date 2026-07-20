@@ -1,3 +1,7 @@
-from universal_runtime.domain.workers.entities import WorkerRegistration, WorkerStatus
+from universal_runtime.domain.workers.entities import (
+    WorkerLease,
+    WorkerRegistration,
+    WorkerStatus,
+)
 
-__all__ = ["WorkerRegistration", "WorkerStatus"]
+__all__ = ["WorkerLease", "WorkerRegistration", "WorkerStatus"]
