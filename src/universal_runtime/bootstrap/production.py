@@ -6,6 +6,7 @@ from typing import Any, cast
 from universal_runtime.adapters.kafka import AioKafkaRunCommandQueue, TopicNames
 from universal_runtime.adapters.memory.capacity import ExecutionCapacity
 from universal_runtime.adapters.memory.registry import InMemoryAdapterRegistry
+from universal_runtime.adapters.postgres.control_plane import PostgresControlPlaneCatalog
 from universal_runtime.adapters.postgres.database import create_engine, create_session_factory
 from universal_runtime.adapters.postgres.events import PostgresEventJournal
 from universal_runtime.adapters.postgres.repositories import (
@@ -50,7 +51,9 @@ def create_production_runtime() -> LocalRuntime:
     sessions = create_session_factory(engine)
     scope = _application_scope()
     application_id = str(scope.application_id)
+    environment = os.environ.get("UR_KAFKA_ENVIRONMENT", "local")
     assistants = PostgresAssistantRepository(sessions, application_id)
+    plans = PostgresControlPlaneCatalog(sessions, environment=environment)
     threads = PostgresThreadRepository(sessions, scope)
     runs = PostgresRunRepository(sessions)
     events = PostgresEventJournal(sessions)
@@ -58,16 +61,14 @@ def create_production_runtime() -> LocalRuntime:
         bootstrap_servers=os.environ.get("UR_KAFKA_BOOTSTRAP_SERVERS", "kafka:9092"),
         topics=TopicNames.from_config(
             prefix=os.environ.get("UR_TOPIC_PREFIX", "rt"),
-            environment=os.environ.get("UR_KAFKA_ENVIRONMENT", "local"),
+            environment=environment,
         ),
         group_id=f"{application_id}.gateway",
     )
     capacity = ExecutionCapacity(int(os.environ.get("UR_WORKER_MAX_CONCURRENCY", "8")))
     adapters = InMemoryAdapterRegistry()
     return LocalRuntime(
-        config=PostgresApplicationConfigRepository(
-            sessions, os.environ.get("UR_KAFKA_ENVIRONMENT", "local")
-        ),
+        config=PostgresApplicationConfigRepository(sessions, environment),
         assistants=cast(Any, assistants),
         outbox=None,
         threads=cast(Any, threads),
@@ -84,6 +85,7 @@ def create_production_runtime() -> LocalRuntime:
             replay=events,
             subscription=events,
             assistants=assistants,
+            plan_resolver=plans,
             execution_scope=scope,
             adapters=adapters,
             capacity=capacity,
