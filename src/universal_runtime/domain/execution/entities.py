@@ -62,10 +62,17 @@ class Run:
     ) -> Run:
         if (
             self.status
-            in {RunStatus.SUCCESS, RunStatus.ERROR, RunStatus.TIMEOUT, RunStatus.CANCELLED}
+            in {
+                RunStatus.SUCCESS,
+                RunStatus.ERROR,
+                RunStatus.TIMEOUT,
+                RunStatus.CANCELLED,
+            }
             and status != self.status
         ):
-            raise ValueError(f"terminal run cannot transition from {self.status} to {status}")
+            raise ValueError(
+                f"terminal run cannot transition from {self.status} to {status}"
+            )
         return Run(
             self.identity,
             status,
@@ -84,11 +91,44 @@ class Run:
         if self.status is RunStatus.PENDING:
             return self
         if self.status is not RunStatus.RUNNING:
-            raise ValueError(f"only a running run can be requeued, got {self.status}")
+            raise ValueError(
+                f"only a running run can be requeued, got {self.status}"
+            )
         return self._change(RunStatus.PENDING, now)
 
+    def resume(self, identity: ExecutionIdentity, now: datetime) -> Run:
+        if self.status is not RunStatus.INTERRUPTED:
+            raise ValueError(
+                f"only an interrupted run can be resumed, got {self.status}"
+            )
+        if identity.run_id != self.identity.run_id:
+            raise ValueError("resume attempt must preserve run_id")
+        if identity.scope != self.identity.scope:
+            raise ValueError("resume attempt must preserve application scope")
+        if identity.assistant_id != self.identity.assistant_id:
+            raise ValueError("resume attempt must preserve assistant_id")
+        if identity.thread_id != self.identity.thread_id:
+            raise ValueError("resume attempt must preserve thread_id")
+        if identity.attempt_id == self.identity.attempt_id:
+            raise ValueError("resume attempt requires a new attempt_id")
+        return Run(
+            identity,
+            RunStatus.PENDING,
+            self.metadata,
+            self.created_at,
+            now,
+            self.result,
+            self.error,
+            self.target,
+        )
+
     def mark_interrupted(self, now: datetime) -> Run:
-        return self._change(RunStatus.INTERRUPTED, now, result=self.result, error=self.error)
+        return self._change(
+            RunStatus.INTERRUPTED,
+            now,
+            result=self.result,
+            error=self.error,
+        )
 
     def complete(self, result: JsonValue, now: datetime) -> Run:
         return self._change(RunStatus.SUCCESS, now, result=result)
