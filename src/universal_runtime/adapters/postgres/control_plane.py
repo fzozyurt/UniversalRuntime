@@ -73,7 +73,20 @@ class PostgresControlPlaneCatalog(ApplicationDeploymentCatalog, ExecutionPlanRes
             async with session.begin():
                 await session.execute(
                     text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
-                    {"key": f"deployment-register:{registration.deployment_id}"},
+                    {"key": f"deployment-register:{registration.application_id}"},
+                )
+                current_active = (
+                    await session.execute(
+                        text(
+                            "SELECT active_revision_id FROM rt_core.applications WHERE id = :id"
+                        ),
+                        {"id": str(registration.application_id)},
+                    )
+                ).scalar_one_or_none()
+                activate_revision = (
+                    current_active is None
+                    or current_active == str(registration.revision_id)
+                    or registration.activate_revision
                 )
                 await session.execute(
                     text(
@@ -82,7 +95,9 @@ class PostgresControlPlaneCatalog(ApplicationDeploymentCatalog, ExecutionPlanRes
                         "VALUES (:id, :workspace_id, :project_id, :name, :environment, :revision_id) "
                         "ON CONFLICT (id) DO UPDATE SET workspace_id = EXCLUDED.workspace_id, "
                         "project_id = EXCLUDED.project_id, name = EXCLUDED.name, "
-                        "environment = EXCLUDED.environment, active_revision_id = EXCLUDED.active_revision_id"
+                        "environment = EXCLUDED.environment, active_revision_id = CASE "
+                        "WHEN :activate_revision THEN EXCLUDED.active_revision_id "
+                        "ELSE rt_core.applications.active_revision_id END"
                     ),
                     {
                         "id": str(registration.application_id),
@@ -91,6 +106,7 @@ class PostgresControlPlaneCatalog(ApplicationDeploymentCatalog, ExecutionPlanRes
                         "name": registration.application_name,
                         "environment": registration.environment,
                         "revision_id": str(registration.revision_id),
+                        "activate_revision": activate_revision,
                     },
                 )
                 await session.execute(
@@ -98,7 +114,7 @@ class PostgresControlPlaneCatalog(ApplicationDeploymentCatalog, ExecutionPlanRes
                         "INSERT INTO rt_core.application_runtime_revisions "
                         "(id, application_id, image_digest, descriptor_hash, metadata, active) "
                         "VALUES (:id, :application_id, :image_digest, :descriptor_hash, "
-                        "CAST(:metadata AS jsonb), true) ON CONFLICT (id) DO NOTHING"
+                        "CAST(:metadata AS jsonb), :active) ON CONFLICT (id) DO NOTHING"
                     ),
                     {
                         "id": str(registration.revision_id),
@@ -106,6 +122,7 @@ class PostgresControlPlaneCatalog(ApplicationDeploymentCatalog, ExecutionPlanRes
                         "image_digest": registration.image_digest,
                         "descriptor_hash": revision_hash,
                         "metadata": _canonical(registration.revision_metadata),
+                        "active": activate_revision,
                     },
                 )
                 revision_row = (
@@ -127,16 +144,17 @@ class PostgresControlPlaneCatalog(ApplicationDeploymentCatalog, ExecutionPlanRes
                         "immutable application revision conflicts with existing revision",
                         details={"revision_id": str(registration.revision_id)},
                     )
-                await session.execute(
-                    text(
-                        "UPDATE rt_core.application_runtime_revisions SET active = false "
-                        "WHERE application_id = :application_id AND id <> :revision_id"
-                    ),
-                    {
-                        "application_id": str(registration.application_id),
-                        "revision_id": str(registration.revision_id),
-                    },
-                )
+                if activate_revision:
+                    await session.execute(
+                        text(
+                            "UPDATE rt_core.application_runtime_revisions SET active = (id = :revision_id) "
+                            "WHERE application_id = :application_id"
+                        ),
+                        {
+                            "application_id": str(registration.application_id),
+                            "revision_id": str(registration.revision_id),
+                        },
+                    )
                 await session.execute(
                     text(
                         "INSERT INTO rt_core.deployments "
@@ -188,24 +206,25 @@ class PostgresControlPlaneCatalog(ApplicationDeploymentCatalog, ExecutionPlanRes
                             "immutable graph revision conflicts with existing descriptor",
                             details={"graph_revision_id": graph_revision_id},
                         )
-                    await session.execute(
-                        text(
-                            "INSERT INTO rt_core.graphs "
-                            "(id, application_id, revision_id, graph_id, entrypoint, descriptor) "
-                            "VALUES (:id, :application_id, :revision_id, :graph_id, :entrypoint, "
-                            "CAST(:descriptor AS jsonb)) ON CONFLICT (id) DO UPDATE SET "
-                            "revision_id = EXCLUDED.revision_id, entrypoint = EXCLUDED.entrypoint, "
-                            "descriptor = EXCLUDED.descriptor"
-                        ),
-                        {
-                            "id": f"{registration.application_id}:{graph.graph_id}",
-                            "application_id": str(registration.application_id),
-                            "revision_id": str(registration.revision_id),
-                            "graph_id": graph.graph_id,
-                            "entrypoint": graph.entrypoint,
-                            "descriptor": _canonical(graph.descriptor),
-                        },
-                    )
+                    if activate_revision:
+                        await session.execute(
+                            text(
+                                "INSERT INTO rt_core.graphs "
+                                "(id, application_id, revision_id, graph_id, entrypoint, descriptor) "
+                                "VALUES (:id, :application_id, :revision_id, :graph_id, :entrypoint, "
+                                "CAST(:descriptor AS jsonb)) ON CONFLICT (id) DO UPDATE SET "
+                                "revision_id = EXCLUDED.revision_id, entrypoint = EXCLUDED.entrypoint, "
+                                "descriptor = EXCLUDED.descriptor"
+                            ),
+                            {
+                                "id": f"{registration.application_id}:{graph.graph_id}",
+                                "application_id": str(registration.application_id),
+                                "revision_id": str(registration.revision_id),
+                                "graph_id": graph.graph_id,
+                                "entrypoint": graph.entrypoint,
+                                "descriptor": _canonical(graph.descriptor),
+                            },
+                        )
                     assistant_id = default_assistant_id(
                         registration.application_id, graph.graph_id
                     )
