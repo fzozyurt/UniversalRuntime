@@ -4,6 +4,10 @@ on:
   push:
   pull_request:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   quality:
     runs-on: ubuntu-latest
@@ -62,6 +66,71 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: quality-reports-${{ github.run_attempt }}
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 14
+
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: runtime
+          POSTGRES_PASSWORD: runtime
+          POSTGRES_DB: runtime
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U runtime -d runtime"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      UR_POSTGRES_URL: postgresql+psycopg://runtime:runtime@localhost:5432/runtime
+      UR_DATABASE_URL: postgresql+psycopg://runtime:runtime@localhost:5432/runtime
+      UR_PLATFORM_DATABASE_URL: postgresql+psycopg://runtime:runtime@localhost:5432/runtime
+      UR_KAFKA_BOOTSTRAP_SERVERS: localhost:9092
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev,langgraph,fastapi,a2a,kafka]'
+      - name: Upgrade empty database twice
+        run: |
+          python - <<'PY'
+          import asyncio
+          import os
+
+          from universal_runtime.adapters.postgres.database import create_engine
+          from universal_runtime.adapters.postgres.migration import migrate_platform
+
+          async def main() -> None:
+              engine = create_engine(os.environ["UR_POSTGRES_URL"])
+              try:
+                  await migrate_platform(engine, application_id="ci", environment="test")
+                  await migrate_platform(engine, application_id="ci", environment="test")
+              finally:
+                  await engine.dispose()
+
+          asyncio.run(main())
+          PY
+      - name: Run PostgreSQL and checkpoint integration tests
+        run: |
+          mkdir -p reports
+          pytest -q -m postgres tests/integration/test_postgres_adapter.py \
+            --junitxml=reports/postgres-pytest.xml \
+            2>&1 | tee reports/postgres.log
+      - name: Upload PostgreSQL reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-reports-${{ github.run_attempt }}
           path: reports/
           if-no-files-found: warn
           retention-days: 14
