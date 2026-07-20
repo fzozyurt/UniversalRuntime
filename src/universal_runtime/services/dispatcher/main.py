@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import signal
 from datetime import UTC, datetime
@@ -24,6 +25,21 @@ from universal_runtime.domain.errors import ErrorCode, RuntimeFailure
 from universal_runtime.domain.events import RuntimeEventDraft, RuntimeEventType
 from universal_runtime.domain.execution import RunError, RunStatus
 from universal_runtime.domain.identity import ExecutionIdentity
+
+_LOGGER = logging.getLogger(__name__)
+_TERMINAL_RUN_STATUSES = {
+    RunStatus.SUCCESS,
+    RunStatus.ERROR,
+    RunStatus.TIMEOUT,
+    RunStatus.CANCELLED,
+    RunStatus.INTERRUPTED,
+}
+_RETRYABLE_GRPC_CODES = {
+    grpc.StatusCode.UNAVAILABLE,
+    grpc.StatusCode.DEADLINE_EXCEEDED,
+    grpc.StatusCode.RESOURCE_EXHAUSTED,
+    grpc.StatusCode.ABORTED,
+}
 
 
 def _struct(values: dict[str, Any]) -> struct_pb2.Struct:
@@ -66,6 +82,14 @@ def _invocation(command: Any) -> execution_pb2.InvokeRequest:
     )
 
 
+def _retryable(exc: BaseException) -> bool:
+    if isinstance(exc, RuntimeFailure):
+        return exc.retryable or exc.code is ErrorCode.INFRASTRUCTURE_UNAVAILABLE
+    if isinstance(exc, grpc.aio.AioRpcError):
+        return exc.code() in _RETRYABLE_GRPC_CODES
+    return isinstance(exc, (ConnectionError, OSError, TimeoutError))
+
+
 class Dispatcher:
     def __init__(self) -> None:
         self.config = LauncherConfig.from_environment()
@@ -97,11 +121,25 @@ class Dispatcher:
             if target.strip()
         )
         self._fallback_index = 0
+        self._max_attempts = max(1, int(os.environ.get("UR_DISPATCH_MAX_ATTEMPTS", "5")))
+        self._retry_base_seconds = max(
+            0.05, float(os.environ.get("UR_DISPATCH_RETRY_BASE_SECONDS", "0.5"))
+        )
+        self._retry_max_seconds = max(
+            self._retry_base_seconds,
+            float(os.environ.get("UR_DISPATCH_RETRY_MAX_SECONDS", "10")),
+        )
 
     async def run(self, stop: asyncio.Event) -> None:
         while not stop.is_set():
-            receipt = await self.queue.receive(self._dispatcher_id())
-            await self._dispatch(receipt)
+            try:
+                receipt = await self.queue.receive(self._dispatcher_id())
+                await self._dispatch(receipt)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _LOGGER.exception("dispatcher loop iteration failed")
+                await asyncio.sleep(self._retry_base_seconds)
 
     def _dispatcher_id(self) -> Any:
         from universal_runtime.domain.identity import WorkerId
@@ -138,6 +176,61 @@ class Dispatcher:
             self._channels[target] = channel
         return channel
 
+    def _retry_delay(self, delivery_count: int) -> float:
+        return min(
+            self._retry_base_seconds * (2 ** max(0, delivery_count - 1)),
+            self._retry_max_seconds,
+        )
+
+    async def _requeue(self, receipt: Any, run: Any, exc: BaseException) -> None:
+        current = await self.runs.get(str(run.run_id))
+        if current.status is RunStatus.RUNNING:
+            await self.runs.update(current.requeue(datetime.now(UTC)))
+        await self.events.append(
+            RuntimeEventDraft(
+                receipt.identity,
+                RuntimeEventType.RUN_QUEUED,
+                data={
+                    "retry": True,
+                    "delivery_count": receipt.delivery_count,
+                    "reason": str(exc),
+                    "graph_id": receipt.command.request.target.graph_id,
+                },
+                native={"runtime.retryable": True},
+            )
+        )
+        await self.queue.reject(receipt, retryable=True)
+        await asyncio.sleep(self._retry_delay(receipt.delivery_count))
+
+    async def _fail_terminal(
+        self,
+        receipt: Any,
+        run: Any,
+        exc: BaseException,
+        *,
+        worker_target: str | None,
+    ) -> None:
+        current = await self.runs.get(str(run.run_id))
+        if current.status not in _TERMINAL_RUN_STATUSES:
+            await self.events.append(
+                RuntimeEventDraft(
+                    receipt.identity,
+                    RuntimeEventType.RUN_FAILED,
+                    data={
+                        "error": str(exc),
+                        "worker_target": worker_target,
+                        "delivery_count": receipt.delivery_count,
+                    },
+                )
+            )
+            await self.runs.update(
+                current.fail(RunError("DISPATCH_FAILED", str(exc)), datetime.now(UTC))
+            )
+            if current.thread_id is not None:
+                thread = await self.threads.get(str(current.thread_id))
+                await self.threads.update(thread.mark_error(datetime.now(UTC)))
+        await self.queue.reject(receipt, retryable=False)
+
     async def _dispatch(self, receipt: Any) -> None:
         try:
             run = await self.runs.get(str(receipt.identity.run_id))
@@ -149,14 +242,17 @@ class Dispatcher:
         if run.status is not RunStatus.PENDING:
             await self.queue.acknowledge(receipt)
             return
-        target = await self._worker_target(receipt)
-        await self.runs.update(run.mark_running(datetime.now(UTC)))
-        stub = execution_pb2_grpc.ExecutionServiceStub(self._channel(target))
-        terminal = False
-        last_result: Any = None
+
+        worker_target: str | None = None
         try:
+            worker_target = await self._worker_target(receipt)
+            await self.runs.update(run.mark_running(datetime.now(UTC)))
+            stub = execution_pb2_grpc.ExecutionServiceStub(self._channel(worker_target))
+            terminal = False
+            last_result: Any = None
             async for event in stub.Stream(
-                execution_pb2.StreamRequest(invocation=_invocation(receipt.command))
+                execution_pb2.StreamRequest(invocation=_invocation(receipt.command)),
+                timeout=receipt.command.request.timeout_seconds,
             ):
                 draft = RuntimeEventDraft(
                     receipt.identity,
@@ -199,26 +295,29 @@ class Dispatcher:
                 thread = await self.threads.get(str(run.thread_id))
                 await self.threads.update(thread.mark_idle(datetime.now(UTC)))
             await self.queue.acknowledge(receipt)
+        except asyncio.CancelledError as exc:
+            if receipt.delivery_count < self._max_attempts:
+                await self._requeue(receipt, run, exc)
+            else:
+                await self._fail_terminal(
+                    receipt, run, exc, worker_target=worker_target
+                )
+            raise
         except Exception as exc:
             current = await self.runs.get(str(run.run_id))
-            await self.events.append(
-                RuntimeEventDraft(
-                    receipt.identity,
-                    RuntimeEventType.RUN_FAILED,
-                    data={"error": str(exc), "worker_target": target},
+            if current.status in _TERMINAL_RUN_STATUSES:
+                await self.queue.acknowledge(receipt)
+                return
+            if _retryable(exc) and receipt.delivery_count < self._max_attempts:
+                _LOGGER.warning(
+                    "retrying run dispatch run_id=%s delivery=%s error=%s",
+                    run.run_id,
+                    receipt.delivery_count,
+                    exc,
                 )
-            )
-            if current.status not in {
-                RunStatus.SUCCESS,
-                RunStatus.ERROR,
-                RunStatus.TIMEOUT,
-                RunStatus.CANCELLED,
-                RunStatus.INTERRUPTED,
-            }:
-                await self.runs.update(
-                    current.fail(RunError("DISPATCH_FAILED", str(exc)), datetime.now(UTC))
-                )
-            await self.queue.acknowledge(receipt)
+                await self._requeue(receipt, run, exc)
+                return
+            await self._fail_terminal(receipt, run, exc, worker_target=worker_target)
 
     async def close(self) -> None:
         await self.queue.close()
