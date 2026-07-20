@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import logging
 import os
 import signal
 from dataclasses import asdict
@@ -14,6 +15,8 @@ from universal_runtime.adapters.langgraph.persistence import postgres_persistenc
 from universal_runtime.adapters.postgres.database import create_engine
 from universal_runtime.adapters.postgres.langgraph import managed_langgraph_persistence
 from universal_runtime.bootstrap.runtime_config import LauncherConfig
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def create_server(adapter: object | None = None) -> WorkerServer:
@@ -68,7 +71,7 @@ async def _serve(config: LauncherConfig) -> None:
 
     server = create_server(adapters)
     await server.start_listening(config.grpc_host, config.grpc_port)
-    await _publish_registration(adapters, server, config)
+    await _publish_registration(adapters, server, config, attempts=10)
     heartbeat_task = asyncio.create_task(_registration_loop(adapters, server, config))
     stopped = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -79,6 +82,16 @@ async def _serve(config: LauncherConfig) -> None:
     finally:
         heartbeat_task.cancel()
         await asyncio.gather(heartbeat_task, return_exceptions=True)
+        try:
+            await _publish_registration(
+                adapters,
+                server,
+                config,
+                status_override="draining",
+                attempts=1,
+            )
+        except Exception:
+            _LOGGER.exception("failed to publish worker draining status")
         await server.stop(config.worker_drain_timeout_seconds)
         await persistence_context.__aexit__(None, None, None)
         await engine.dispose()
@@ -90,11 +103,23 @@ async def _registration_loop(
     interval = max(1, int(os.environ.get("UR_WORKER_HEARTBEAT_SECONDS", "10")))
     while True:
         await asyncio.sleep(interval)
-        await _publish_registration(adapters, server, config)
+        try:
+            await _publish_registration(adapters, server, config, attempts=3)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Registration TTL and repeated heartbeats make temporary Gateway outages
+            # recoverable. The Worker must keep serving already leased runs.
+            _LOGGER.exception("worker heartbeat publication failed")
 
 
 async def _publish_registration(
-    adapters: dict[str, LangGraphAdapter], server: WorkerServer, config: LauncherConfig
+    adapters: dict[str, LangGraphAdapter],
+    server: WorkerServer,
+    config: LauncherConfig,
+    *,
+    status_override: str | None = None,
+    attempts: int,
 ) -> None:
     """Advertise one application deployment replica and its current capacity."""
     url = os.environ.get("UR_GATEWAY_REGISTER_URL")
@@ -112,7 +137,10 @@ async def _publish_registration(
     target = os.environ.get(
         "UR_WORKER_ADVERTISE_TARGET", f"{config.grpc_host}:{config.grpc_port}"
     )
-    status = "busy" if server.worker.available_slots == 0 else "ready"
+    status = status_override or (
+        "busy" if server.worker.available_slots == 0 else "ready"
+    )
+    available_slots = 0 if status == "draining" else server.worker.available_slots
     payload = {
         "worker_id": os.environ.get("UR_INSTANCE_ID", "worker"),
         "target": target,
@@ -126,20 +154,21 @@ async def _publish_registration(
         "manifests": manifests,
         "max_concurrency": server.worker.max_concurrency,
         "active_executions": server.worker.active_executions,
-        "available_slots": server.worker.available_slots,
+        "available_slots": available_slots,
         "status": status,
     }
     timeout = httpx.Timeout(3.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         last_error: Exception | None = None
-        for _ in range(10):
+        for attempt in range(max(1, attempts)):
             try:
                 response = await client.post(url, json=payload)
                 response.raise_for_status()
                 return
             except (httpx.HTTPError, OSError) as exc:
                 last_error = exc
-                await asyncio.sleep(1)
+                if attempt + 1 < attempts:
+                    await asyncio.sleep(1)
         if last_error is not None:
             raise RuntimeError(f"worker registration failed: {url}") from last_error
 
