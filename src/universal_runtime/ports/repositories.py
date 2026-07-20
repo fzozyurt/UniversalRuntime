@@ -4,6 +4,7 @@ from typing import Protocol
 
 from universal_runtime.domain.assistants import Assistant
 from universal_runtime.domain.execution import ExecutionRequest, Run, Thread
+from universal_runtime.domain.identity import ApplicationScope
 
 
 class AssistantRepository(Protocol):
@@ -21,7 +22,12 @@ class ThreadRepository(Protocol):
     async def get(self, thread_id: str) -> Thread: ...
     async def update(self, thread: Thread) -> Thread: ...
     async def delete(self, thread_id: str) -> None: ...
-    async def count(self, *, metadata: dict[str, object] | None = None, status: str | None = None) -> int: ...
+    async def count(
+        self,
+        *,
+        metadata: dict[str, object] | None = None,
+        status: str | None = None,
+    ) -> int: ...
     async def search(
         self,
         *,
@@ -32,6 +38,10 @@ class ThreadRepository(Protocol):
     ) -> tuple[Thread, ...]: ...
 
 
+class ThreadApplicationBinder(Protocol):
+    async def bind(self, thread_id: str, scope: ApplicationScope) -> None: ...
+
+
 class RunRepository(Protocol):
     async def create(self, run: Run) -> Run: ...
     async def get(self, run_id: str) -> Run: ...
@@ -40,7 +50,12 @@ class RunRepository(Protocol):
     async def active_for_thread(self, thread_id: str) -> Run | None: ...
     async def latest_for_thread(self, thread_id: str) -> Run | None: ...
     async def list_for_thread(
-        self, thread_id: str, *, limit: int = 10, offset: int = 0, status: str | None = None
+        self,
+        thread_id: str,
+        *,
+        limit: int = 10,
+        offset: int = 0,
+        status: str | None = None,
     ) -> tuple[Run, ...]: ...
 
 
