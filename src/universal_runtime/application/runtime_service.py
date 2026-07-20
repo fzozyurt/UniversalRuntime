@@ -27,6 +27,7 @@ from universal_runtime.domain.identity import (
     WorkerId,
 )
 from universal_runtime.domain.primitives.json_types import JsonObject, JsonValue
+from universal_runtime.ports.control_plane import ExecutionPlanResolver
 from universal_runtime.ports.events import EventJournal, EventReplay, EventSubscription
 from universal_runtime.ports.outbox import OutboxMessage, OutboxRepository
 from universal_runtime.ports.queue import RunCommandQueue
@@ -54,6 +55,7 @@ class RuntimeExecutionService:
         subscription: EventSubscription | None = None,
         outbox: OutboxRepository | None = None,
         assistants: AssistantRepository | None = None,
+        plan_resolver: ExecutionPlanResolver | None = None,
         execution_scope: ApplicationScope | None = None,
         adapters: AdapterRegistry | None = None,
         capacity: Any | None = None,
@@ -66,6 +68,7 @@ class RuntimeExecutionService:
         self._subscription = subscription
         self._outbox = outbox
         self._assistants = assistants
+        self._plan_resolver = plan_resolver
         self._execution_scope = execution_scope
         self._adapters = adapters
         self._capacity = capacity
@@ -84,11 +87,11 @@ class RuntimeExecutionService:
         )
         return await self._threads.create(thread)
 
-    def _pin_execution_scope(self, request: ExecutionRequest) -> ExecutionRequest:
-        scope = self._execution_scope
-        if scope is None or request.identity.scope == scope:
-            return request
+    @staticmethod
+    def _with_scope(request: ExecutionRequest, scope: ApplicationScope) -> ExecutionRequest:
         identity = request.identity
+        if identity.scope == scope:
+            return request
         return replace(
             request,
             identity=ExecutionIdentity(
@@ -100,19 +103,69 @@ class RuntimeExecutionService:
             ),
         )
 
-    async def _resolve_request(self, request: ExecutionRequest) -> ExecutionRequest:
+    async def _resolve_request(
+        self,
+        request: ExecutionRequest,
+        *,
+        pinned_scope: ApplicationScope | None = None,
+        pinned_target: ExecutionTarget | None = None,
+    ) -> ExecutionRequest:
         """Resolve authoritative scope, assistant config and executable graph.
 
-        The HTTP compatibility layer may carry placeholder scope values. The
-        application service replaces them with the immutable deployment scope before
-        a run or event is persisted. Assistant resolution is also centralized here so
-        native HTTP, LangGraph compatibility, A2A and direct SDK calls behave equally.
+        New runs resolve the active assistant version and active deployment. Resume
+        requests pass the scope and target pinned on the original run, so a rolling
+        deployment or assistant update cannot move an interrupted execution.
         """
-        request = self._pin_execution_scope(request)
+        if self._plan_resolver is not None:
+            requested_version = (
+                pinned_target.assistant_version
+                if pinned_target is not None
+                else (
+                    request.target.assistant_version
+                    if request.target.graph_id != "default"
+                    else None
+                )
+            )
+            plan = await self._plan_resolver.resolve(
+                request.identity.assistant_id,
+                version=requested_version,
+            )
+            if (
+                request.target.graph_id != "default"
+                and request.target.graph_id != plan.target.graph_id
+            ):
+                raise RuntimeFailure(
+                    ErrorCode.INVALID_EXECUTION_INPUT,
+                    "execution target graph does not match assistant graph",
+                    details={
+                        "assistant_id": str(plan.assistant.assistant_id),
+                        "assistant_graph_id": plan.assistant.graph_id,
+                        "requested_graph_id": request.target.graph_id,
+                    },
+                )
+            target = pinned_target or plan.target
+            if target.graph_id != plan.assistant.graph_id:
+                raise RuntimeFailure(
+                    ErrorCode.INVALID_EXECUTION_INPUT,
+                    "pinned execution target no longer belongs to the assistant",
+                )
+            request = self._with_scope(request, pinned_scope or plan.scope)
+            return replace(
+                request,
+                target=target,
+                config={**plan.assistant.config, **request.config},
+                context={**plan.assistant.context, **request.context},
+                metadata={**plan.assistant.metadata, **request.metadata},
+            )
+
+        if pinned_scope is not None:
+            request = self._with_scope(request, pinned_scope)
+        elif self._execution_scope is not None:
+            request = self._with_scope(request, self._execution_scope)
         if self._assistants is None:
-            return request
+            return replace(request, target=pinned_target or request.target)
         assistant = await self._assistants.get(str(request.identity.assistant_id))
-        target = request.target
+        target = pinned_target or request.target
         if target.graph_id == "default":
             target = ExecutionTarget(assistant.graph_id, assistant.version)
         elif target.graph_id != assistant.graph_id:
@@ -125,15 +178,12 @@ class RuntimeExecutionService:
                     "requested_graph_id": target.graph_id,
                 },
             )
-        config = {**assistant.config, **request.config}
-        context = {**assistant.context, **request.context}
-        metadata = {**assistant.metadata, **request.metadata}
         return replace(
             request,
-            target=ExecutionTarget(target.graph_id, assistant.version),
-            config=config,
-            context=context,
-            metadata=metadata,
+            target=target,
+            config={**assistant.config, **request.config},
+            context={**assistant.context, **request.context},
+            metadata={**assistant.metadata, **request.metadata},
         )
 
     async def start_run(
@@ -246,15 +296,14 @@ class RuntimeExecutionService:
         return cancelled
 
     async def resume_run(self, request: ExecutionRequest) -> Run:
-        request = await self._resolve_request(request)
         run = await self._runs.get(str(request.identity.run_id))
         if run.status is not RunStatus.INTERRUPTED:
             raise RuntimeFailure(ErrorCode.INVALID_EXECUTION_INPUT, "run is not interrupted")
-        if request.target != run.target:
-            raise RuntimeFailure(
-                ErrorCode.INVALID_EXECUTION_INPUT,
-                "resume must use the graph and assistant version pinned to the original run",
-            )
+        request = await self._resolve_request(
+            replace(request, identity=run.identity, target=run.target),
+            pinned_scope=run.identity.scope,
+            pinned_target=run.target,
+        )
         now = _now()
         await self._commands.publish(
             RunCommand(
