@@ -15,12 +15,11 @@ def main(*, run_forever: bool = True) -> int:
             host=config.host,
             port=config.port,
             timeout_keep_alive=75,
-            timeout_graceful_shutdown=int(config.worker_drain_timeout_seconds),
+            timeout_graceful_shutdown=int(
+                config.worker_drain_timeout_seconds
+            ),
         )
     return 0
-
-
-app = create_shared_gateway_app()
 
 
 if __name__ == "__main__":
