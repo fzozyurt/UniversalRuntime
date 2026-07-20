@@ -65,6 +65,7 @@ class CapturingSubmission:
     run: Run | None = None
     command: RunCommand | None = None
     thread: Thread | None = None
+    resumed: bool = False
 
     async def submit(
         self,
@@ -79,6 +80,21 @@ class CapturingSubmission:
         if thread is not None:
             await self.threads.update(thread)
         return await self.runs.create(run)
+
+    async def resume(
+        self,
+        run: Run,
+        command: RunCommand,
+        *,
+        thread: Thread | None,
+    ) -> Run:
+        self.resumed = True
+        self.run = run
+        self.command = command
+        self.thread = thread
+        if thread is not None:
+            await self.threads.update(thread)
+        return await self.runs.update(run)
 
 
 @dataclass
@@ -154,6 +170,59 @@ async def test_managed_service_submits_run_thread_and_command_as_one_intent() ->
     events = await journal.replay(created.run_id)
     assert [event.type for event in events] == [RuntimeEventType.RUN_QUEUED]
     assert events[0].data["outbox"] is True
+
+
+@pytest.mark.asyncio
+async def test_managed_resume_allocates_new_attempt_and_preserves_target() -> None:
+    runs = InMemoryRunRepository()
+    threads = InMemoryThreadRepository()
+    journal = InMemoryEventJournal()
+    now = datetime.now(UTC)
+    await threads.create(
+        Thread(
+            ThreadId.parse("thread-1"),
+            ThreadStatus.INTERRUPTED,
+            {},
+            now,
+            now,
+        )
+    )
+    interrupted = Run(
+        identity=_identity(),
+        status=RunStatus.INTERRUPTED,
+        created_at=now,
+        updated_at=now,
+        target=ExecutionTarget("graph-1", 7),
+    )
+    await runs.create(interrupted)
+    submission = CapturingSubmission(runs, threads)
+    service = _service(
+        runs=runs,
+        threads=threads,
+        journal=journal,
+        submission=submission,
+    )
+    request = ExecutionRequest(
+        identity=interrupted.identity,
+        command={"resume": {"approved": True}},
+    )
+
+    resumed = await service.resume_run(request)
+
+    assert resumed.run_id == interrupted.run_id
+    assert resumed.status is RunStatus.PENDING
+    assert resumed.identity.attempt_id != interrupted.identity.attempt_id
+    assert resumed.target == ExecutionTarget("graph-1", 7)
+    assert submission.resumed is True
+    assert submission.command is not None
+    assert submission.command.identity == resumed.identity
+    assert submission.command.request.target == resumed.target
+    assert submission.thread is not None
+    assert submission.thread.status is ThreadStatus.BUSY
+    events = await journal.replay(resumed.run_id)
+    assert events[-1].type is RuntimeEventType.RUN_QUEUED
+    assert events[-1].data["resume"] is True
+    assert events[-1].data["attempt_id"] == str(resumed.identity.attempt_id)
 
 
 @pytest.mark.asyncio
