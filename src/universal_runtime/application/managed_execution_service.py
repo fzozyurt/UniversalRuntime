@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -54,7 +55,10 @@ class ManagedExecutionService(RuntimeExecutionService):
         if self._submission is None or outbox is not None:
             thread_id = resolved.identity.thread_id
             if thread_id is not None and self._thread_binder is not None:
-                await self._thread_binder.bind(str(thread_id), resolved.identity.scope)
+                await self._thread_binder.bind(
+                    str(thread_id),
+                    resolved.identity.scope,
+                )
             return await super().start_run(resolved, outbox=outbox)
 
         now = datetime.now(UTC)
@@ -103,6 +107,70 @@ class ManagedExecutionService(RuntimeExecutionService):
         )
         return created
 
+    async def resume_run(self, request: ExecutionRequest) -> Run:
+        run = await self._runs.get(str(request.identity.run_id))
+        if run.status is not RunStatus.INTERRUPTED:
+            raise RuntimeFailure(
+                ErrorCode.INVALID_EXECUTION_INPUT,
+                "run is not interrupted",
+            )
+        resolved = await self._resolve_request(
+            replace(request, target=run.target),
+            pinned_scope=run.identity.scope,
+            pinned_target=run.target,
+        )
+        now = datetime.now(UTC)
+        try:
+            resumed = run.resume(resolved.identity, now)
+        except ValueError as exc:
+            raise RuntimeFailure(
+                ErrorCode.INVALID_EXECUTION_INPUT,
+                str(exc),
+            ) from exc
+
+        busy_thread = None
+        if resumed.thread_id is not None:
+            thread = await self._threads.get(str(resumed.thread_id))
+            if thread.status.value == "busy":
+                raise RuntimeFailure(
+                    ErrorCode.THREAD_BUSY,
+                    f"thread is busy: {resumed.thread_id}",
+                )
+            busy_thread = thread.mark_busy(now)
+
+        command_request = replace(resolved, identity=resumed.identity)
+        command = RunCommand(
+            command_id=CommandId.new(),
+            identity=resumed.identity,
+            request=command_request,
+            priority=command_request.priority,
+            available_at=now,
+            created_at=now,
+        )
+        if self._submission is None:
+            await self._runs.update(resumed)
+            await self._commands.publish(command)
+        else:
+            await self._submission.resume(
+                resumed,
+                command,
+                thread=busy_thread,
+            )
+        await self._journal.append(
+            RuntimeEventDraft(
+                resumed.identity,
+                RuntimeEventType.RUN_QUEUED,
+                data={
+                    "resume": True,
+                    "attempt_id": str(resumed.identity.attempt_id),
+                    "graph_id": resumed.target.graph_id,
+                    "assistant_version": resumed.target.assistant_version,
+                    "outbox": self._submission is not None,
+                },
+            )
+        )
+        return resumed
+
     async def cancel_run(self, run_id: str) -> Run:
         run = await self._runs.get(run_id)
         if run.status in _TERMINAL_STATUSES:
@@ -119,7 +187,10 @@ class ManagedExecutionService(RuntimeExecutionService):
             except Exception:
                 # Cancellation intent is already durable. A transient Worker/Gateway
                 # failure must not turn a user cancellation into an HTTP failure.
-                _LOGGER.exception("remote run cancellation failed run_id=%s", run_id)
+                _LOGGER.exception(
+                    "remote run cancellation failed run_id=%s",
+                    run_id,
+                )
 
         adapter = self._active_adapters.get(str(run.run_id))
         if adapter is not None:
@@ -129,7 +200,10 @@ class ManagedExecutionService(RuntimeExecutionService):
                 )
                 owner_notified = True
             except Exception:
-                _LOGGER.exception("local adapter cancellation failed run_id=%s", run_id)
+                _LOGGER.exception(
+                    "local adapter cancellation failed run_id=%s",
+                    run_id,
+                )
 
         if run.thread_id is not None:
             thread = await self._threads.get(str(run.thread_id))
