@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 from google.protobuf import empty_pb2, struct_pb2
 
@@ -130,8 +131,11 @@ class BoundedWorker:
 
 
 class WorkerControlServicer(worker_pb2_grpc.WorkerControlServiceServicer):
-    def __init__(self, worker: BoundedWorker) -> None:
+    def __init__(
+        self, worker: BoundedWorker, migrate_app: Callable[..., Any] | None = None
+    ) -> None:
         self.worker = worker
+        self._migrate_app = migrate_app
 
     async def Register(
         self, request: worker_pb2.RegisterWorkerRequest, context: object
@@ -169,6 +173,20 @@ class WorkerControlServicer(worker_pb2_grpc.WorkerControlServiceServicer):
                     )
                 )
 
+    async def Migrate(
+        self, request: worker_pb2.MigrateRequest, context: object
+    ) -> worker_pb2.MigrateResponse:
+        del context
+        if self._migrate_app is None:
+            return worker_pb2.MigrateResponse(
+                success=False, error="migration handler not configured"
+            )
+        try:
+            await self._migrate_app(request)
+        except Exception as exc:
+            return worker_pb2.MigrateResponse(success=False, error=str(exc))
+        return worker_pb2.MigrateResponse(success=True)
+
     async def Drain(
         self, request: worker_pb2.DrainWorkerRequest, context: object
     ) -> empty_pb2.Empty:
@@ -183,7 +201,11 @@ class WorkerControlServicer(worker_pb2_grpc.WorkerControlServiceServicer):
 
 
 class ExecutionServicer(execution_pb2_grpc.ExecutionServiceServicer):
-    def __init__(self, worker: BoundedWorker, adapter: RuntimeAdapter | dict[str, RuntimeAdapter] | None = None) -> None:
+    def __init__(
+        self,
+        worker: BoundedWorker,
+        adapter: RuntimeAdapter | dict[str, RuntimeAdapter] | None = None,
+    ) -> None:
         self.worker, self.adapter = worker, adapter
 
     def _adapter_for(self, assistant_id: str) -> RuntimeAdapter:
@@ -205,11 +227,21 @@ class ExecutionServicer(execution_pb2_grpc.ExecutionServiceServicer):
         telemetry = initialize(component="worker")
         configure_logging()
         try:
-            with runtime_run_span(telemetry.tracer, {"runtime.run_id": request.identity.run_id, "runtime.assistant_id": request.identity.assistant_id}) as current_span:
+            with runtime_run_span(
+                telemetry.tracer,
+                {
+                    "runtime.run_id": request.identity.run_id,
+                    "runtime.assistant_id": request.identity.assistant_id,
+                },
+            ) as current_span:
                 try:
                     adapter = self._adapter_for(request.identity.assistant_id)
                     output = await adapter.invoke(_request_from_proto(request))
-                    return execution_pb2.InvokeResponse(run_id=request.identity.run_id, status="accepted", output=python_to_value(output))
+                    return execution_pb2.InvokeResponse(
+                        run_id=request.identity.run_id,
+                        status="accepted",
+                        output=python_to_value(output),
+                    )
                 except Exception as exc:
                     record_failure(current_span, exc, error_code="RUNTIME_EXECUTION_FAILED")
                     raise

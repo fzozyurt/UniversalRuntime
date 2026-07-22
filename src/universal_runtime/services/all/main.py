@@ -4,6 +4,7 @@ import asyncio
 import importlib
 import os
 import signal
+from typing import Any
 
 import uvicorn
 
@@ -19,7 +20,7 @@ from universal_runtime.services.gateway.app import create_app
 
 async def _serve(config: LauncherConfig) -> None:
     """Run Gateway, Dispatcher and Worker in one process.
- 
+
     This is a compact deployment profile, not a local/in-memory shortcut.  It
     retains Kafka, PostgreSQL and the gRPC worker boundary, and can be scaled by
     running multiple identical ``all`` pods with distinct instance IDs.
@@ -28,10 +29,6 @@ async def _serve(config: LauncherConfig) -> None:
 
     init_observability()
 
-    This is a compact deployment profile, not a local/in-memory shortcut.  It
-    retains Kafka, PostgreSQL and the gRPC worker boundary, and can be scaled by
-    running multiple identical ``all`` pods with distinct instance IDs.
-    """
     if not os.environ.get("UR_WORKER_TARGETS"):
         os.environ["UR_WORKER_TARGETS"] = "127.0.0.1:" + str(config.grpc_port)
     if not os.environ.get("UR_GATEWAY_REGISTER_URL"):
@@ -71,10 +68,19 @@ async def _serve(config: LauncherConfig) -> None:
         persistence_mode="platform-managed",
         providers=postgres_persistence(persistence.checkpointer, persistence.store),
     )
+
+    async def _migrate_app(_request: Any) -> None:
+        from sqlalchemy import text
+
+        async with engine.connect() as _conn:
+            await _conn.execute(text("SELECT 1"))
+            await _conn.commit()
+
     worker = WorkerServer.create(
         configured_concurrency=config.worker_max_concurrency,
         policy_ceiling=int(os.getenv("UR_WORKER_POLICY_CEILING", "64")),
         adapter=adapter,
+        migrate_app=_migrate_app,
     )
     dispatcher = Dispatcher()
     stop = asyncio.Event()

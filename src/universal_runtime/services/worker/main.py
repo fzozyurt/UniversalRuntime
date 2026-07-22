@@ -4,7 +4,9 @@ import asyncio
 import importlib
 import os
 import signal
+from collections.abc import Callable
 from dataclasses import asdict
+from typing import Any
 
 import httpx
 
@@ -16,7 +18,9 @@ from universal_runtime.adapters.postgres.langgraph import managed_langgraph_pers
 from universal_runtime.bootstrap.runtime_config import LauncherConfig
 
 
-def create_server(adapter: object | None = None) -> WorkerServer:
+def create_server(
+    adapter: object | None = None, *, migrate_app: Callable[..., Any] | None = None
+) -> WorkerServer:
     config = LauncherConfig.from_environment()
     return WorkerServer.create(
         configured_concurrency=int(
@@ -24,6 +28,7 @@ def create_server(adapter: object | None = None) -> WorkerServer:
         ),
         policy_ceiling=int(os.getenv("UR_WORKER_POLICY_CEILING", "64")),
         adapter=adapter,
+        migrate_app=migrate_app,
     )
 
 
@@ -65,7 +70,15 @@ async def _serve(config: LauncherConfig) -> None:
             providers=postgres_persistence(persistence.checkpointer, persistence.store),
         )
         adapters[adapter.descriptor.graph_id] = adapter
-    server = create_server(adapters)
+
+    async def _migrate_app(_request: Any) -> None:
+        from sqlalchemy import text
+
+        async with engine.connect() as _conn:
+            await _conn.execute(text("SELECT 1"))
+            await _conn.commit()
+
+    server = create_server(adapters, migrate_app=_migrate_app)
     await server.start_listening(config.grpc_host, config.grpc_port)
     for adapter in adapters.values():
         await _register_with_gateway(adapter, config)
@@ -80,15 +93,21 @@ async def _serve(config: LauncherConfig) -> None:
 
 
 async def _register_with_gateway(adapter: LangGraphAdapter, config: LauncherConfig) -> None:
-    """Advertise the worker and graph capability to the Gateway when configured."""
     url = os.environ.get("UR_GATEWAY_REGISTER_URL")
     if not url:
         return
+    instance_id = os.environ.get("UR_INSTANCE_ID", "worker")
     manifest = adapter.manifest
-    payload = {
-        "worker_id": os.environ.get("UR_INSTANCE_ID", "worker"),
-        "target": os.environ.get("UR_WORKER_ADVERTISE_TARGET", f"{config.grpc_host}:{config.grpc_port}"),
+    payload: dict[str, object] = {
+        "worker_id": instance_id,
+        "pod_name": os.environ.get("HOSTNAME", instance_id),
+        "target": os.environ.get(
+            "UR_WORKER_ADVERTISE_TARGET", f"{config.grpc_host}:{config.grpc_port}"
+        ),
         "application_id": os.environ.get("UR_APPLICATION_ID", "default"),
+        "workspace_key": os.environ.get("UR_WORKSPACE_KEY", "default"),
+        "app_version": os.environ.get("ARTIFACT_VERSION", "unknown"),
+        "alembic_version": os.environ.get("ARTIFACT_VERSION", "unknown"),
         "graph_id": adapter.descriptor.graph_id,
         "manifest": {
             "adapter_id": manifest.adapter_id,
@@ -97,23 +116,23 @@ async def _register_with_gateway(adapter: LangGraphAdapter, config: LauncherConf
             "capabilities": asdict(manifest.capabilities),
         },
     }
-    timeout = httpx.Timeout(3.0)
+    timeout = httpx.Timeout(10.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
-        last_error: Exception | None = None
-        for _ in range(10):
+        for attempt in range(10):
             try:
                 response = await client.post(url, json=payload)
                 response.raise_for_status()
                 return
             except (httpx.HTTPError, OSError) as exc:
-                last_error = exc
+                if attempt >= 9:
+                    raise RuntimeError(f"worker registration failed: {url}") from exc
                 await asyncio.sleep(1)
-        if last_error is not None:
-            raise RuntimeError(f"worker registration failed: {url}") from last_error
 
 
 def _entrypoints() -> list[str]:
-    raw = os.environ.get("UR_APPLICATION_ENTRYPOINTS") or os.environ.get("UR_APPLICATION_ENTRYPOINT")
+    raw = os.environ.get("UR_APPLICATION_ENTRYPOINTS") or os.environ.get(
+        "UR_APPLICATION_ENTRYPOINT"
+    )
     if not raw:
         raise RuntimeError("UR_APPLICATION_ENTRYPOINT or UR_APPLICATION_ENTRYPOINTS is required")
     return [item.strip() for item in raw.split(",") if item.strip()]

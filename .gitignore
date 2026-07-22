@@ -77,3 +77,8 @@ target/
 .tmp/
 .contract-validation/
 
+# AI Agents
+.opencode/
+.serena/
+.claude/
+.gemini/

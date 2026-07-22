@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 import grpc
 from grpc_health.v1 import health, health_pb2, health_pb2_grpc
@@ -22,11 +24,12 @@ class WorkerServer:
         configured_concurrency: int,
         policy_ceiling: int,
         adapter: object | None = None,
+        migrate_app: Callable[..., Any] | None = None,
     ) -> WorkerServer:
         worker = BoundedWorker(WorkerConfig(configured_concurrency, policy_ceiling))
         server = grpc.aio.server()
         worker_pb2_grpc.add_WorkerControlServiceServicer_to_server(
-            WorkerControlServicer(worker), server
+            WorkerControlServicer(worker, migrate_app=migrate_app), server
         )
         execution_pb2_grpc.add_ExecutionServiceServicer_to_server(
             ExecutionServicer(worker, adapter), server

@@ -322,3 +322,21 @@ class ArtifactRow(AuditMixin, PlatformBase):
     kind: Mapped[str] = mapped_column(String(64), nullable=False)
     uri: Mapped[str] = mapped_column(String(2048), nullable=False)
     metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, nullable=False)
+
+
+class ApplicationMigrationRow(AuditMixin, PlatformBase):
+    __tablename__ = "application_migrations"
+    __table_args__ = (
+        UniqueConstraint("application_id", "workspace_key", "environment"),
+        {"schema": DEFAULT_SCHEMAS.core},
+    )
+
+    id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    application_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    workspace_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    environment: Mapped[str] = mapped_column(String(63), nullable=False)
+    app_version: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("'pending'")
+    )
+    error: Mapped[str | None] = mapped_column(String(2048))

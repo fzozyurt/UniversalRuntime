@@ -13,6 +13,7 @@ option java_package = "ai.runtime.v1";
 service WorkerControlService {
   rpc Register(RegisterWorkerRequest) returns (RegisterWorkerResponse);
   rpc Work(stream WorkerMessage) returns (stream ControllerMessage);
+  rpc Migrate(MigrateRequest) returns (MigrateResponse);
   rpc Drain(DrainWorkerRequest) returns (google.protobuf.Empty);
 }
 
@@ -97,6 +98,19 @@ message ControllerMessage {
     google.protobuf.Struct config_update = 3;
     bool drain = 4;
   }
+}
+
+message MigrateRequest {
+  string application_id = 1;
+  string workspace_key = 2;
+  string environment = 3;
+  string app_version = 4;
+}
+
+message MigrateResponse {
+  bool success = 1;
+  string error = 2;
+  string detail = 3;
 }
 
 message DrainWorkerRequest {

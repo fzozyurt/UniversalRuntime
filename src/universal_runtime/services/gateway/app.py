@@ -168,7 +168,7 @@ def create_app(
                         message="request validation failed",
                         retryable=False,
                         request_id=request.state.request_id,
-                details={"errors": cast(JsonObject, jsonable_encoder(exc.errors()))},
+                        details={"errors": cast(JsonObject, jsonable_encoder(exc.errors()))},
                     )
                 ).model_dump(mode="json"),
             )
@@ -201,11 +201,103 @@ def create_app(
                 ErrorCode.INVALID_EXECUTION_INPUT,
                 "worker_id and target are required",
             )
+        application_id = str(payload.get("application_id", ""))
+        workspace_key = str(payload.get("workspace_key", "default"))
+        app_version = str(payload.get("app_version", ""))
+        alembic_version = str(payload.get("alembic_version", ""))
+
         app.state.worker_registry[worker_id] = {
             **payload,
             "registered_at": datetime.now(UTC).isoformat(),
         }
-        return {"registered": True, "worker_id": worker_id, "target": target}
+        res: dict[str, object] = {
+            "registered": True,
+            "worker_id": worker_id,
+            "target": target,
+        }
+
+        database_url = os.environ.get("UR_DATABASE_URL")
+        if not database_url or not application_id:
+            return res
+
+        from sqlalchemy import insert, select
+
+        from universal_runtime.adapters.postgres.models import ApplicationMigrationRow
+
+        engine = create_engine(database_url)
+        try:
+            environment = os.environ.get("UR_KAFKA_ENVIRONMENT", "local")
+            async with engine.begin() as conn:
+                query = select(ApplicationMigrationRow).where(
+                    ApplicationMigrationRow.application_id == application_id,
+                    ApplicationMigrationRow.workspace_key == workspace_key,
+                    ApplicationMigrationRow.environment == environment,
+                )
+                row = (await conn.execute(query)).scalar_one_or_none()
+
+                if row is not None and row.status == "success":
+                    res["migration"] = {"status": "skipped", "reason": "already_completed"}
+                    return res
+                if row is not None and row.status == "migrating":
+                    res["migration"] = {"status": "waiting", "reason": "another_worker_migrating"}
+                    return res
+
+                if row is None:
+                    await conn.execute(
+                        insert(ApplicationMigrationRow).values(
+                            id=str(CommandId.new()),
+                            application_id=application_id,
+                            workspace_key=workspace_key,
+                            environment=environment,
+                            app_version=app_version or alembic_version,
+                            status="migrating",
+                        )
+                    )
+                else:
+                    row.status = "migrating"
+
+            import grpc
+
+            from universal_runtime.adapters.grpc.generated.runtime.v1 import (
+                worker_pb2,
+                worker_pb2_grpc,
+            )
+
+            channel = grpc.aio.insecure_channel(target)
+            try:
+                stub = worker_pb2_grpc.WorkerControlServiceStub(channel)
+                req = worker_pb2.MigrateRequest(
+                    application_id=application_id,
+                    workspace_key=workspace_key,
+                    environment=environment,
+                    app_version=app_version or alembic_version,
+                )
+                resp = await stub.Migrate(req, timeout=60)
+                status: str = "success" if resp.success else "fail"
+                error: str | None = resp.error if not resp.success else None
+            except Exception as exc:
+                status = "fail"
+                error = str(exc)
+            finally:
+                await channel.close()
+
+            async with engine.begin() as conn:
+                query = select(ApplicationMigrationRow).where(
+                    ApplicationMigrationRow.application_id == application_id,
+                    ApplicationMigrationRow.workspace_key == workspace_key,
+                    ApplicationMigrationRow.environment == environment,
+                )
+                row = (await conn.execute(query)).scalar_one()
+                row.status = status
+                row.error = error
+
+            migration_result: dict[str, object] = {"status": status}
+            if error:
+                migration_result["error"] = error
+            res["migration"] = migration_result
+        finally:
+            await engine.dispose()
+        return res
 
     @app.get("/internal/workers")
     async def list_workers() -> list[JsonObject]:
@@ -292,7 +384,9 @@ def create_app(
         except json.JSONDecodeError as exc:
             raise RuntimeFailure(ErrorCode.INVALID_EXECUTION_INPUT, "invalid JSON body") from exc
         if not isinstance(decoded, dict):
-            raise RuntimeFailure(ErrorCode.INVALID_EXECUTION_INPUT, "versions body must be an object")
+            raise RuntimeFailure(
+                ErrorCode.INVALID_EXECUTION_INPUT, "versions body must be an object"
+            )
         request_payload = cast(JsonObject, decoded)
         limit = max(0, min(int(request_payload.get("limit", 10)), 1000))
         offset = max(0, int(request_payload.get("offset", 0)))
@@ -300,7 +394,9 @@ def create_app(
         return [_assistant_payload(item) for item in versions[offset : offset + limit]]
 
     @app.post("/assistants/{assistant_id}/latest")
-    async def set_latest_assistant(assistant_id: str, payload: JsonObject = Body(...)) -> dict[str, Any]:
+    async def set_latest_assistant(
+        assistant_id: str, payload: JsonObject = Body(...)
+    ) -> dict[str, Any]:
         version = int(payload.get("version", 0))
         if version < 1:
             raise RuntimeFailure(ErrorCode.INVALID_EXECUTION_INPUT, "version must be positive")
@@ -331,7 +427,9 @@ def create_app(
         adapter = _runtime_adapter(state)
         get_graph = getattr(adapter, "get_graph", None)
         if get_graph is None:
-            raise RuntimeFailure(ErrorCode.CAPABILITY_NOT_SUPPORTED, "graph inspection is not supported")
+            raise RuntimeFailure(
+                ErrorCode.CAPABILITY_NOT_SUPPORTED, "graph inspection is not supported"
+            )
         return await get_graph(xray=xray)
 
     @app.get("/assistants/{assistant_id}/subgraphs")
@@ -340,7 +438,9 @@ def create_app(
         adapter = _runtime_adapter(state)
         get_subgraphs = getattr(adapter, "get_subgraphs", None)
         if get_subgraphs is None:
-            raise RuntimeFailure(ErrorCode.CAPABILITY_NOT_SUPPORTED, "subgraph inspection is not supported")
+            raise RuntimeFailure(
+                ErrorCode.CAPABILITY_NOT_SUPPORTED, "subgraph inspection is not supported"
+            )
         return await get_subgraphs(xray=xray)
 
     @app.get("/assistants/{assistant_id}")
@@ -356,7 +456,9 @@ def create_app(
             graph_id=payload.graph_id or current.graph_id,
             version=current.version + 1,
             name=payload.name if payload.name is not None else current.name,
-            description=payload.description if payload.description is not None else current.description,
+            description=payload.description
+            if payload.description is not None
+            else current.description,
             config=payload.config if payload.config else current.config,
             context=payload.context if payload.context else current.context,
             metadata=payload.metadata if payload.metadata else current.metadata,
@@ -444,7 +546,9 @@ def create_app(
         return await state.threads.count(metadata=metadata, status=status)
 
     @app.patch("/threads/{thread_id}")
-    async def update_thread(thread_id: str, request: Request, payload: JsonObject = Body(...)) -> dict[str, Any] | None:
+    async def update_thread(
+        thread_id: str, request: Request, payload: JsonObject = Body(...)
+    ) -> dict[str, Any] | None:
         thread = await state.threads.get(thread_id)
         metadata = payload.get("metadata")
         if not isinstance(metadata, dict):
@@ -452,14 +556,18 @@ def create_app(
         merged = dict(thread.metadata)
         merged.update(metadata)
         updated = await state.threads.update(
-            type(thread)(thread.thread_id, thread.status, merged, thread.created_at, datetime.now(UTC))
+            type(thread)(
+                thread.thread_id, thread.status, merged, thread.created_at, datetime.now(UTC)
+            )
         )
         if request.headers.get("prefer") == "return=minimal":
             return None
         return _thread_payload(updated)
 
     @app.put("/threads/{thread_id}")
-    async def replace_thread(thread_id: str, request: Request, payload: JsonObject = Body(...)) -> dict[str, Any] | None:
+    async def replace_thread(
+        thread_id: str, request: Request, payload: JsonObject = Body(...)
+    ) -> dict[str, Any] | None:
         return await update_thread(thread_id, request, payload)
 
     @app.delete("/threads/{thread_id}", status_code=204)
@@ -502,7 +610,9 @@ def create_app(
         return _compat_state(result)
 
     @app.post("/threads/{thread_id}/state/checkpoint")
-    async def update_thread_state_checkpoint(thread_id: str, payload: JsonObject = Body(...)) -> Any:
+    async def update_thread_state_checkpoint(
+        thread_id: str, payload: JsonObject = Body(...)
+    ) -> Any:
         return await update_thread_state(thread_id, payload)
 
     @app.get("/threads/{thread_id}/history")
@@ -634,7 +744,9 @@ def create_app(
             raise RuntimeFailure(ErrorCode.RESOURCE_NOT_FOUND, "run does not belong to thread")
         deleter = getattr(state.runs, "delete", None)
         if deleter is None:
-            raise RuntimeFailure(ErrorCode.CAPABILITY_NOT_SUPPORTED, "run deletion is not supported")
+            raise RuntimeFailure(
+                ErrorCode.CAPABILITY_NOT_SUPPORTED, "run deletion is not supported"
+            )
         await deleter(run_id)
 
     @app.get("/threads/{thread_id}/runs/{run_id}/join")
@@ -713,6 +825,7 @@ async def _auto_register_application(state: LocalRuntime, app: FastAPI) -> None:
             if exc.code is not ErrorCode.INVALID_EXECUTION_INPUT:
                 raise
 
+
 async def _start_run(state: LocalRuntime, payload: RunCreate, thread_id: str | None) -> Any:
     assistant = await state.assistants.get(payload.assistant_id)
     resolved_thread = ThreadId.parse(thread_id) if thread_id is not None else None
@@ -778,7 +891,11 @@ async def _wait_for_run(state: LocalRuntime, run_id: RunId, adapter: Any = None)
             RunStatus.CANCELLED,
             RunStatus.INTERRUPTED,
         }:
-            if adapter is not None and run.status is RunStatus.SUCCESS and run.thread_id is not None:
+            if (
+                adapter is not None
+                and run.status is RunStatus.SUCCESS
+                and run.thread_id is not None
+            ):
                 state_data = await adapter.get_state(ExecutionRequest(identity=run.identity))
                 if state_data is not None:
                     return _compat_state(state_data)
@@ -805,9 +922,7 @@ def _compat_state(state: Any) -> JsonObject:
             "checkpoint": _checkpoint_from_config(getattr(state, "config", {})),
             "metadata": getattr(state, "metadata", {}),
             "created_at": getattr(state, "created_at", None),
-            "parent_checkpoint": _checkpoint_from_config(
-                getattr(state, "parent_config", None)
-            ),
+            "parent_checkpoint": _checkpoint_from_config(getattr(state, "parent_config", None)),
             "tasks": list(getattr(state, "tasks", ())),
             "interrupts": list(getattr(state, "interrupts", ())),
         }

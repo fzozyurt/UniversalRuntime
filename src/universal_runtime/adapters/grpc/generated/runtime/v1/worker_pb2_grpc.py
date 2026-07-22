@@ -6,7 +6,7 @@ import warnings
 from google.protobuf import empty_pb2 as google_dot_protobuf_dot_empty__pb2
 from universal_runtime.adapters.grpc.generated.runtime.v1 import worker_pb2 as runtime_dot_v1_dot_worker__pb2
 
-GRPC_GENERATED_VERSION = '1.81.1'
+GRPC_GENERATED_VERSION = '1.82.1'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -45,6 +45,11 @@ class WorkerControlServiceStub:
                 request_serializer=runtime_dot_v1_dot_worker__pb2.WorkerMessage.SerializeToString,
                 response_deserializer=runtime_dot_v1_dot_worker__pb2.ControllerMessage.FromString,
                 _registered_method=True)
+        self.Migrate = channel.unary_unary(
+                '/runtime.v1.WorkerControlService/Migrate',
+                request_serializer=runtime_dot_v1_dot_worker__pb2.MigrateRequest.SerializeToString,
+                response_deserializer=runtime_dot_v1_dot_worker__pb2.MigrateResponse.FromString,
+                _registered_method=True)
         self.Drain = channel.unary_unary(
                 '/runtime.v1.WorkerControlService/Drain',
                 request_serializer=runtime_dot_v1_dot_worker__pb2.DrainWorkerRequest.SerializeToString,
@@ -62,6 +67,12 @@ class WorkerControlServiceServicer:
         raise NotImplementedError('Method not implemented!')
 
     def Work(self, request_iterator, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def Migrate(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -85,6 +96,11 @@ def add_WorkerControlServiceServicer_to_server(servicer, server):
                     servicer.Work,
                     request_deserializer=runtime_dot_v1_dot_worker__pb2.WorkerMessage.FromString,
                     response_serializer=runtime_dot_v1_dot_worker__pb2.ControllerMessage.SerializeToString,
+            ),
+            'Migrate': grpc.unary_unary_rpc_method_handler(
+                    servicer.Migrate,
+                    request_deserializer=runtime_dot_v1_dot_worker__pb2.MigrateRequest.FromString,
+                    response_serializer=runtime_dot_v1_dot_worker__pb2.MigrateResponse.SerializeToString,
             ),
             'Drain': grpc.unary_unary_rpc_method_handler(
                     servicer.Drain,
@@ -146,6 +162,33 @@ class WorkerControlService:
             '/runtime.v1.WorkerControlService/Work',
             runtime_dot_v1_dot_worker__pb2.WorkerMessage.SerializeToString,
             runtime_dot_v1_dot_worker__pb2.ControllerMessage.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def Migrate(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/runtime.v1.WorkerControlService/Migrate',
+            runtime_dot_v1_dot_worker__pb2.MigrateRequest.SerializeToString,
+            runtime_dot_v1_dot_worker__pb2.MigrateResponse.FromString,
             options,
             channel_credentials,
             insecure,
