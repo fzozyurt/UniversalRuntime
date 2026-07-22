@@ -87,13 +87,13 @@ class PostgresAssistantRepository:
                 )
             metadata = dict(version.metadata_json)
             return Assistant(
-                AssistantId.parse(row.id),
-                row.graph_id,
-                version.version,
-                metadata.pop("name", None),
-                version.config,
-                version.context,
-                metadata,
+                assistant_id=AssistantId.parse(row.id),
+                graph_id=row.graph_id,
+                version=version.version,
+                name=metadata.pop("name", None),
+                config=version.config,
+                context=version.context,
+                metadata=metadata,
             )
 
     async def all(self) -> tuple[Assistant, ...]:

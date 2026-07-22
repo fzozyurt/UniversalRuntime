@@ -242,13 +242,17 @@ def create_app(
         )
         from universal_runtime.domain.assistants import Assistant
 
+        now = datetime.now(UTC)
         assistant = Assistant(
             assistant_id=assistant_id,
             graph_id=graph_id,
             name=payload.name,
+            description=payload.description,
             config=payload.config,
             context=payload.context,
             metadata=payload.metadata,
+            created_at=now,
+            updated_at=now,
         )
         created = await state.assistants.create(assistant)
         return _assistant_payload(created)
@@ -326,14 +330,18 @@ def create_app(
     @app.patch("/assistants/{assistant_id}")
     async def update_assistant(assistant_id: str, payload: AssistantCreate) -> dict[str, Any]:
         current = await state.assistants.get(assistant_id)
+        now = datetime.now(UTC)
         updated = Assistant(
             assistant_id=current.assistant_id,
             graph_id=payload.graph_id or current.graph_id,
             version=current.version + 1,
             name=payload.name if payload.name is not None else current.name,
+            description=payload.description if payload.description is not None else current.description,
             config=payload.config if payload.config else current.config,
             context=payload.context if payload.context else current.context,
             metadata=payload.metadata if payload.metadata else current.metadata,
+            created_at=current.created_at,
+            updated_at=now,
         )
         return _assistant_payload(await state.assistants.update(assistant_id, updated))
 
@@ -614,7 +622,8 @@ def create_app(
         run = await state.runs.get(run_id)
         if run.thread_id is None or str(run.thread_id) != thread_id:
             raise RuntimeFailure(ErrorCode.RESOURCE_NOT_FOUND, "run does not belong to thread")
-        return await _wait_for_run(state, run.run_id)
+        adapter = _runtime_adapter(state)
+        return await _wait_for_run(state, run.run_id, adapter)
 
     @app.post("/runs/{run_id}/cancel", status_code=204)
     async def cancel_run(run_id: str) -> None:
@@ -708,13 +717,15 @@ async def _start_run(state: LocalRuntime, payload: RunCreate, thread_id: str | N
         configurable = dict(merged_config.get("configurable", {}))
         configurable["checkpoint_id"] = payload.checkpoint_id
         merged_config["configurable"] = configurable
+    merged_metadata = dict(payload.metadata)
+    merged_metadata["multitask_strategy"] = payload.multitask_strategy
     request = ExecutionRequest(
         identity=identity,
         input=cast(JsonValue, payload.input),
         command=cast(JsonValue, payload.command),
         config=merged_config,
         context=payload.context,
-        metadata=payload.metadata,
+        metadata=merged_metadata,
         stream_modes=modes,
         stream_subgraphs=payload.stream_subgraphs,
         priority={
@@ -737,7 +748,7 @@ async def _latest_thread_run(state: LocalRuntime, thread_id: str) -> Any:
     return run
 
 
-async def _wait_for_run(state: LocalRuntime, run_id: RunId) -> dict[str, Any]:
+async def _wait_for_run(state: LocalRuntime, run_id: RunId, adapter: Any = None) -> dict[str, Any]:
     while True:
         run = await state.runs.get(str(run_id))
         if run.status in {
@@ -747,6 +758,10 @@ async def _wait_for_run(state: LocalRuntime, run_id: RunId) -> dict[str, Any]:
             RunStatus.CANCELLED,
             RunStatus.INTERRUPTED,
         }:
+            if adapter is not None and run.status is RunStatus.SUCCESS and run.thread_id is not None:
+                state_data = await adapter.get_state(ExecutionRequest(identity=run.identity))
+                if state_data is not None:
+                    return _compat_state(state_data)
             return _run_payload(run)
         await asyncio.sleep(0.05)
 
@@ -851,7 +866,10 @@ def _sse_response(
                 stream_mode = event.native.get("langgraph_mode")
                 if stream_mode not in selected_modes:
                     continue
-                event_name = str(stream_mode)
+                if event.namespace:
+                    event_name = str(stream_mode) + "|" + "|".join(event.namespace)
+                else:
+                    event_name = str(stream_mode)
                 encoded_payload = event.data
             yield f"id: {event.sequence}\nevent: {event_name}\ndata: {json.dumps(encoded_payload, separators=(',', ':'))}\n\n"
         if not native:
@@ -933,9 +951,12 @@ def _assistant_payload(assistant: Any) -> JsonObject:
         "graph_id": assistant.graph_id,
         "version": assistant.version,
         "name": assistant.name,
+        "description": assistant.description,
         "config": assistant.config,
         "context": assistant.context,
         "metadata": assistant.metadata,
+        "created_at": assistant.created_at.isoformat() if assistant.created_at else None,
+        "updated_at": assistant.updated_at.isoformat() if assistant.updated_at else None,
     }
 
 
@@ -946,6 +967,8 @@ def _thread_payload(thread: Any) -> JsonObject:
         "metadata": thread.metadata,
         "created_at": thread.created_at.isoformat() if thread.created_at else None,
         "updated_at": thread.updated_at.isoformat() if thread.updated_at else None,
+        "values": {},
+        "interrupts": {},
     }
 
 
@@ -954,8 +977,11 @@ def _run_payload(run: Any) -> JsonObject:
         "run_id": str(run.run_id),
         "thread_id": str(run.thread_id) if run.thread_id else None,
         "assistant_id": str(run.identity.assistant_id),
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+        "updated_at": run.updated_at.isoformat() if run.updated_at else None,
         "status": run.status.value,
         "metadata": run.metadata,
+        "multitask_strategy": run.metadata.get("multitask_strategy", "reject"),
     }
 
 
