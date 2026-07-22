@@ -371,9 +371,7 @@ class RuntimeExecutionService:
                 ),
                 config={"configurable": {"thread_id": thread_id}},
             )
-            result = await adapter.get_state(request)
-            if result is not None:
-                return result
+            return await adapter.get_state(request)
         if self._replay is not None:
             events = await self._replay.replay_by_thread(thread_id)
             for event in reversed(events):

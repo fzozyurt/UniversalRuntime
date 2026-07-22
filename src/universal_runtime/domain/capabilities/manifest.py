@@ -9,7 +9,6 @@ from universal_runtime.domain.capabilities.enums import RuntimeProfile, SessionA
 class IdentityCapabilities:
     accepts_thread_id: bool = True
     accepts_run_id: bool = True
-    accepts_checkpoint_id: bool = True
 
 
 @dataclass(frozen=True, slots=True)

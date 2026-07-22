@@ -703,11 +703,16 @@ async def _start_run(state: LocalRuntime, payload: RunCreate, thread_id: str | N
         if isinstance(payload.stream_mode, str)
         else tuple(payload.stream_mode)
     )
+    merged_config = dict(payload.config)
+    if payload.checkpoint_id is not None:
+        configurable = dict(merged_config.get("configurable", {}))
+        configurable["checkpoint_id"] = payload.checkpoint_id
+        merged_config["configurable"] = configurable
     request = ExecutionRequest(
         identity=identity,
         input=cast(JsonValue, payload.input),
         command=cast(JsonValue, payload.command),
-        config=payload.config,
+        config=merged_config,
         context=payload.context,
         metadata=payload.metadata,
         stream_modes=modes,

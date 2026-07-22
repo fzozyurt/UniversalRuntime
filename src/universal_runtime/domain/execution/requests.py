@@ -21,8 +21,6 @@ class ExecutionRequest:
     stream_subgraphs: bool = False
     priority: QueuePriority = QueuePriority.INTERACTIVE
     timeout_seconds: int = 1800
-    checkpoint_namespace: str = ""
-    checkpoint_id: str | None = None
 
     def __post_init__(self) -> None:
         for name in ("config", "context", "metadata"):

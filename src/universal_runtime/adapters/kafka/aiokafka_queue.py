@@ -63,8 +63,6 @@ def _json_command(command: RunCommand) -> bytes:
                 "stream_subgraphs": request.stream_subgraphs,
                 "priority": int(request.priority),
                 "timeout_seconds": request.timeout_seconds,
-                "checkpoint_namespace": request.checkpoint_namespace,
-                "checkpoint_id": request.checkpoint_id,
             },
             "priority": int(command.priority),
             "created_at": command.created_at.isoformat(),
@@ -101,8 +99,6 @@ def _command(payload: bytes) -> RunCommand:
         stream_subgraphs=bool(raw_request.get("stream_subgraphs", False)),
         priority=QueuePriority(int(raw_request.get("priority", 100))),
         timeout_seconds=int(raw_request.get("timeout_seconds", 1800)),
-        checkpoint_namespace=str(raw_request.get("checkpoint_namespace", "")),
-        checkpoint_id=raw_request.get("checkpoint_id"),
     )
     return RunCommand(
         command_id=CommandId.parse(value["command_id"]),

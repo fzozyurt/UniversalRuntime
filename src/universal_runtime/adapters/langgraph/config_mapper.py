@@ -19,8 +19,8 @@ def map_config(request: ExecutionRequest) -> dict[str, Any]:
     thread_id = str(identity.thread_id) if identity.thread_id is not None else str(identity.run_id)
     protected_config = {
         "thread_id": thread_id,
-        "checkpoint_ns": request.checkpoint_namespace,
-        "checkpoint_id": request.checkpoint_id,
+        "checkpoint_ns": configurable.get("checkpoint_ns", ""),
+        "checkpoint_id": configurable.get("checkpoint_id"),
         "assistant_id": str(identity.assistant_id),
         "run_id": str(identity.run_id),
     }
