@@ -113,6 +113,8 @@ def _command(payload: bytes) -> RunCommand:
 class AioKafkaRunCommandQueue(RunCommandQueue):
     """Durable production command queue backed by Kafka consumer groups."""
 
+    _MAX_RETRIES = 3
+
     def __init__(
         self,
         *,
@@ -179,8 +181,15 @@ class AioKafkaRunCommandQueue(RunCommandQueue):
         message = await self._consumer.getone()
         command = _command(message.value)
         now = datetime.now(UTC)
+        delivery_count = 1
+        for header_key, header_value in message.headers or ():
+            if header_key == "retry-count":
+                try:
+                    delivery_count = int(header_value.decode()) + 1
+                except (ValueError, UnicodeDecodeError):
+                    pass
         receipt = RunCommandReceipt(
-            command, LeaseId.new(), 1, now, now + timedelta(seconds=self._lease_seconds)
+            command, LeaseId.new(), delivery_count, now, now + timedelta(seconds=self._lease_seconds)
         )
         self._leases[str(receipt.lease_id)] = message
         return receipt
@@ -197,10 +206,22 @@ class AioKafkaRunCommandQueue(RunCommandQueue):
         message = self._leases.pop(str(receipt.lease_id), None)
         if message is None or self._consumer is None:
             raise RuntimeFailure(ErrorCode.INVALID_EXECUTION_INPUT, "receipt is not active")
-        if not retryable:
-            await self._consumer.commit(
-                {TopicPartition(message.topic, message.partition): message.offset + 1}
-            )
+        await self._consumer.commit(
+            {TopicPartition(message.topic, message.partition): message.offset + 1}
+        )
+        if not retryable or receipt.delivery_count >= self._MAX_RETRIES:
+            return
+        assert self._producer is not None
+        await self._producer.send(
+            message.topic,
+            _json_command(receipt.command),
+            key=PartitionKey.for_command(receipt.command).encode(),
+            headers=[
+                ("runtime-schema-version", b"1"),
+                ("run-id", str(receipt.command.identity.run_id).encode()),
+                ("retry-count", str(receipt.delivery_count).encode()),
+            ],
+        )
 
     async def close(self) -> None:
         consumer, producer = self._consumer, self._producer
