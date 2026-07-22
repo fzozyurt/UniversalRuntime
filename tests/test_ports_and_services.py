@@ -1,4 +1,3 @@
-from services.dispatcher.main import main as dispatcher_main
 from services.event_projector.main import main as projector_main
 from services.gateway.main import main as gateway_main
 from services.worker.main import main as worker_main
@@ -28,4 +27,4 @@ def test_ports_expose_contract_types() -> None:
 
 
 def test_service_composition_roots_are_callable() -> None:
-    assert gateway_main() == dispatcher_main() == worker_main() == projector_main() == 0
+    assert gateway_main() == worker_main() == projector_main() == 0

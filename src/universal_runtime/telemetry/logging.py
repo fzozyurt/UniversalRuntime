@@ -72,7 +72,13 @@ def _redirect_uvicorn(logger: structlog.stdlib.BoundLogger, level: int) -> None:
 
     class AccessHandler(logging.Handler):
         def emit(self, record: logging.LogRecord) -> None:
-            logger.info("http.request", method=record.args.get("m", "?"), path=record.args.get("U", "?"), status=record.args.get("s", "?"), duration_ms=record.args.get("T", "?"))
+            logger.info(
+                "http.request",
+                method=record.args.get("m", "?"),
+                path=record.args.get("U", "?"),
+                status=record.args.get("s", "?"),
+                duration_ms=record.args.get("T", "?"),
+            )
 
     access.addHandler(AccessHandler())
 

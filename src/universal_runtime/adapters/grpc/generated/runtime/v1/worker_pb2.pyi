@@ -179,3 +179,11 @@ class DrainWorkerRequest(_message.Message):
     worker_id: str
     timeout_seconds: int
     def __init__(self, worker_id: _Optional[str] = ..., timeout_seconds: _Optional[int] = ...) -> None: ...
+
+class StreamEventsAck(_message.Message):
+    __slots__ = ("accepted", "run_id")
+    ACCEPTED_FIELD_NUMBER: _ClassVar[int]
+    RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    accepted: bool
+    run_id: str
+    def __init__(self, accepted: _Optional[bool] = ..., run_id: _Optional[str] = ...) -> None: ...

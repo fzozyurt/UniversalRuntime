@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from jsonschema import Draft202012Validator
 
 from universal_runtime.adapters.a2a.server import create_a2a_routes
+from universal_runtime.adapters.grpc.payloads import value_to_python
 from universal_runtime.adapters.langgraph import LangGraphAdapter
 from universal_runtime.adapters.langgraph.persistence import postgres_persistence
 from universal_runtime.adapters.postgres.database import create_engine
@@ -58,6 +59,27 @@ SCHEMA_PATH = (
 )
 
 
+class _EventIngressServicer:
+    def __init__(self, queues: dict[str, list[asyncio.Queue[Any]]]) -> None:
+        self._queues = queues
+
+    async def StreamEvents(self, request_iterator: Any, context: object) -> Any:  # noqa: N802
+        del context
+        from universal_runtime.adapters.grpc.generated.runtime.v1 import worker_pb2
+
+        run_id: str | None = None
+        async for proto_event in request_iterator:
+            if run_id is None:
+                run_id = proto_event.identity.run_id
+                self._queues.setdefault(run_id, [])
+            for q in self._queues.get(run_id, []):
+                await q.put(proto_event)
+        if run_id:
+            for q in self._queues.pop(run_id, []):
+                await q.put(None)
+        return worker_pb2.StreamEventsAck(accepted=True, run_id=run_id or "")
+
+
 def create_app(
     runtime: LocalRuntime | None = None,
     *,
@@ -88,6 +110,7 @@ def create_app(
     app.add_middleware(RequestLogMiddleware)  # type: ignore[arg-type]
     app.state.runtime = state
     app.state.worker_registry = {}
+    app.state.run_queues = {}
 
     @app.on_event("startup")
     async def start_local_execution() -> None:
@@ -108,12 +131,32 @@ def create_app(
                 await engine.dispose()
         else:
             app.state.migration_done = False
+
+        import grpc
+        from grpc_health.v1 import health, health_pb2, health_pb2_grpc
+
+        from universal_runtime.adapters.grpc.generated.runtime.v1 import worker_pb2_grpc
+
+        grpc_port = int(os.environ.get("UR_GATEWAY_GRPC_PORT", "9091"))
+        app.state.grpc_server = grpc.aio.server()
+        worker_pb2_grpc.add_EventIngressServiceServicer_to_server(
+            _EventIngressServicer(app.state.run_queues), app.state.grpc_server
+        )
+        health_servicer = health.HealthServicer()
+        health_servicer.set("", health_pb2.HealthCheckResponse.SERVING)
+        health_pb2_grpc.add_HealthServicer_to_server(health_servicer, app.state.grpc_server)
+        app.state.grpc_server.add_insecure_port(f"0.0.0.0:{grpc_port}")
+        await app.state.grpc_server.start()
+
         await _auto_register_application(state, app)
         await state.start()
 
     @app.on_event("shutdown")
     async def stop_local_execution() -> None:
         await state.shutdown()
+        grpc_srv = getattr(app.state, "grpc_server", None)
+        if grpc_srv is not None:
+            await grpc_srv.stop(5)
         context = getattr(app.state, "langgraph_context", None)
         if context is not None:
             await context.__aexit__(None, None, None)
@@ -658,7 +701,12 @@ def create_app(
             else None
         )
         return _sse_response(
-            state, run.run_id, payload.stream_mode, request=request, after_sequence=cursor
+            state,
+            run.run_id,
+            payload.stream_mode,
+            request=request,
+            after_sequence=cursor,
+            run_queues=app.state.run_queues,
         )
 
     @app.get("/threads/{thread_id}/runs/{run_id}/stream")
@@ -671,19 +719,33 @@ def create_app(
         run = await state.runs.get(run_id)
         if run.thread_id is None or str(run.thread_id) != thread_id:
             raise RuntimeFailure(ErrorCode.RESOURCE_NOT_FOUND, "run does not belong to thread")
-        return _sse_response(state, run.run_id, stream_mode or "values", request=request)
+        return _sse_response(
+            state,
+            run.run_id,
+            stream_mode or "values",
+            request=request,
+            run_queues=app.state.run_queues,
+        )
 
     @app.get("/threads/{thread_id}/stream")
     async def join_thread_stream(
         thread_id: str, request: Request, stream_mode: str | None = None
     ) -> StreamingResponse:
         run = await _latest_thread_run(state, thread_id)
-        return _sse_response(state, run.run_id, stream_mode or "values", request=request)
+        return _sse_response(
+            state,
+            run.run_id,
+            stream_mode or "values",
+            request=request,
+            run_queues=app.state.run_queues,
+        )
 
     @app.post("/runs/stream")
     async def stream_stateless_run(request: Request, payload: RunCreate) -> StreamingResponse:
         run = await _start_run(state, payload, None)
-        return _sse_response(state, run.run_id, payload.stream_mode, request=request)
+        return _sse_response(
+            state, run.run_id, payload.stream_mode, request=request, run_queues=app.state.run_queues
+        )
 
     @app.post("/runs")
     async def create_stateless_run(payload: RunCreate) -> dict[str, Any]:
@@ -700,7 +762,14 @@ def create_app(
     @app.get("/api/v1/runs/{run_id}/events")
     async def native_run_events(run_id: str, request: Request) -> StreamingResponse:
         await state.runs.get(run_id)
-        return _sse_response(state, RunId.parse(run_id), "events", request=request, native=True)
+        return _sse_response(
+            state,
+            RunId.parse(run_id),
+            "events",
+            request=request,
+            native=True,
+            run_queues=app.state.run_queues,
+        )
 
     @app.post("/runs/wait")
     async def wait_stateless_run(payload: RunCreate) -> Any:
@@ -977,6 +1046,7 @@ def _sse_response(
     request: Request,
     native: bool = False,
     after_sequence: int | None = None,
+    run_queues: dict[str, list[asyncio.Queue[Any]]] | None = None,
 ) -> StreamingResponse:
     selected_modes = {mode} if isinstance(mode, str) else set(mode)
     cursor_text = request.headers.get("last-event-id")
@@ -989,6 +1059,52 @@ def _sse_response(
             ) from exc
     if after_sequence < -1:
         raise RuntimeFailure(ErrorCode.STREAM_CURSOR_INVALID, "Last-Event-ID must be >= 0")
+
+    if run_queues is not None:
+        queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=10000)
+        run_queues.setdefault(str(run_id), []).append(queue)
+
+        async def stream_from_queue() -> Any:
+            if not native:
+                yield "event: metadata\ndata: " + json.dumps({"run_id": str(run_id)}) + "\n\n"
+            while True:
+                proto_event = await queue.get()
+                if proto_event is None:
+                    break
+                if proto_event.sequence <= after_sequence:
+                    continue
+                event_type = str(proto_event.type)
+                ns = tuple(proto_event.namespace)
+                data = value_to_python(proto_event.data)
+                ntv = {k: value_to_python(v) for k, v in proto_event.native.fields.items()}
+                if native:
+                    event_name = event_type
+                    encoded: JsonValue = {
+                        "schema_version": 1,
+                        "sequence": proto_event.sequence,
+                        "run_id": proto_event.identity.run_id,
+                        "type": event_type,
+                        "data": data,
+                    }
+                else:
+                    stream_mode = ntv.get("langgraph_mode", "values")
+                    if stream_mode not in selected_modes:
+                        continue
+                    event_name = str(stream_mode) + ("|" + "|".join(ns) if ns else "")
+                    encoded = data
+                yield (
+                    f"id: {proto_event.sequence}\n"
+                    f"event: {event_name}\n"
+                    f"data: {json.dumps(encoded, separators=(',', ':'))}\n\n"
+                )
+            if not native:
+                yield "event: end\ndata: null\n\n"
+
+        return StreamingResponse(
+            stream_from_queue(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     async def stream() -> Any:
         if not native:

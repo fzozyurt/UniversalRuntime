@@ -8,10 +8,7 @@ import structlog
 
 @contextmanager
 def bind_context(**kwargs: Any) -> Any:
-    saved = {
-        key: structlog.contextvars.get_contextvars().get(key)
-        for key in kwargs
-    }
+    saved = {key: structlog.contextvars.get_contextvars().get(key) for key in kwargs}
     structlog.contextvars.bind_contextvars(**kwargs)
     try:
         yield

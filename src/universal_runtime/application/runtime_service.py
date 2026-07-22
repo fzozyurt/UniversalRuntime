@@ -230,7 +230,9 @@ class RuntimeExecutionService:
                     continue
                 raise
             except Exception:
-                _LOGGER.exception("runtime command execution failed run_id=%s", receipt.identity.run_id)
+                _LOGGER.exception(
+                    "runtime command execution failed run_id=%s", receipt.identity.run_id
+                )
                 raise
 
     async def _execute_receipt(self, receipt: Any, adapter: RuntimeAdapter) -> None:

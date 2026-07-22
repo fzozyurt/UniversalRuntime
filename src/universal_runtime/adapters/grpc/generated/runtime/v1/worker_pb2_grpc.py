@@ -4,6 +4,7 @@ import grpc
 import warnings
 
 from google.protobuf import empty_pb2 as google_dot_protobuf_dot_empty__pb2
+from universal_runtime.adapters.grpc.generated.runtime.v1 import execution_pb2 as runtime_dot_v1_dot_execution__pb2
 from universal_runtime.adapters.grpc.generated.runtime.v1 import worker_pb2 as runtime_dot_v1_dot_worker__pb2
 
 GRPC_GENERATED_VERSION = '1.82.1'
@@ -216,6 +217,84 @@ class WorkerControlService:
             '/runtime.v1.WorkerControlService/Drain',
             runtime_dot_v1_dot_worker__pb2.DrainWorkerRequest.SerializeToString,
             google_dot_protobuf_dot_empty__pb2.Empty.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+
+class EventIngressServiceStub:
+    """--- Gateway-side service ---
+
+    """
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.StreamEvents = channel.stream_unary(
+                '/runtime.v1.EventIngressService/StreamEvents',
+                request_serializer=runtime_dot_v1_dot_execution__pb2.RuntimeEvent.SerializeToString,
+                response_deserializer=runtime_dot_v1_dot_worker__pb2.StreamEventsAck.FromString,
+                _registered_method=True)
+
+
+class EventIngressServiceServicer:
+    """--- Gateway-side service ---
+
+    """
+
+    def StreamEvents(self, request_iterator, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_EventIngressServiceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'StreamEvents': grpc.stream_unary_rpc_method_handler(
+                    servicer.StreamEvents,
+                    request_deserializer=runtime_dot_v1_dot_execution__pb2.RuntimeEvent.FromString,
+                    response_serializer=runtime_dot_v1_dot_worker__pb2.StreamEventsAck.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'runtime.v1.EventIngressService', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('runtime.v1.EventIngressService', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class EventIngressService:
+    """--- Gateway-side service ---
+
+    """
+
+    @staticmethod
+    def StreamEvents(request_iterator,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.stream_unary(
+            request_iterator,
+            target,
+            '/runtime.v1.EventIngressService/StreamEvents',
+            runtime_dot_v1_dot_execution__pb2.RuntimeEvent.SerializeToString,
+            runtime_dot_v1_dot_worker__pb2.StreamEventsAck.FromString,
             options,
             channel_credentials,
             insecure,

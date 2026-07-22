@@ -56,11 +56,11 @@ def command(name: str, priority: QueuePriority, thread: str = "thread") -> RunCo
 
 def test_topics_and_partition_key() -> None:
     topics = TopicNames.from_config(
-        prefix="x", environment="prod", overrides={"batch": "custom.batch"}
+        prefix="x", environment="prod", overrides={"long_queue": "custom.long_queue"}
     )
-    assert topics.interactive == "x.prod.runs.interactive.v1"
-    assert topics.batch == "custom.batch"
-    assert PartitionKey.for_command(command("run", QueuePriority.NORMAL)) == "a:thread"
+    assert topics.short_queue == "x.prod.runs.short_queue"
+    assert topics.long_queue == "custom.long_queue"
+    assert PartitionKey.for_command(command("run", QueuePriority.INTERACTIVE)) == "a:thread"
 
 
 @pytest.mark.asyncio

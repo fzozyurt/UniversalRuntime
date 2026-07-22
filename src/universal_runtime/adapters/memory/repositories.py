@@ -36,7 +36,9 @@ class InMemoryAssistantRepository:
     async def update(self, assistant_id: str, assistant: Assistant) -> Assistant:
         async with self._lock:
             if str(assistant_id) not in self._items:
-                raise RuntimeFailure(ErrorCode.RESOURCE_NOT_FOUND, f"assistant not found: {assistant_id}")
+                raise RuntimeFailure(
+                    ErrorCode.RESOURCE_NOT_FOUND, f"assistant not found: {assistant_id}"
+                )
             self._items[str(assistant_id)] = assistant
             return assistant
 
@@ -44,19 +46,26 @@ class InMemoryAssistantRepository:
         del delete_threads
         async with self._lock:
             if self._items.pop(str(assistant_id), None) is None:
-                raise RuntimeFailure(ErrorCode.RESOURCE_NOT_FOUND, f"assistant not found: {assistant_id}")
+                raise RuntimeFailure(
+                    ErrorCode.RESOURCE_NOT_FOUND, f"assistant not found: {assistant_id}"
+                )
 
     async def versions(self, assistant_id: str) -> tuple[Assistant, ...]:
         return (await self.get(assistant_id),)
 
     async def set_latest(self, assistant_id: str, version: int) -> Assistant:
         if version != 1:
-            raise RuntimeFailure(ErrorCode.RESOURCE_NOT_FOUND, f"assistant version not found: {assistant_id}/{version}")
+            raise RuntimeFailure(
+                ErrorCode.RESOURCE_NOT_FOUND,
+                f"assistant version not found: {assistant_id}/{version}",
+            )
         return await self.get(assistant_id)
 
     async def count(self, *, graph_id: str | None = None) -> int:
         async with self._lock:
-            return sum(graph_id is None or item.graph_id == graph_id for item in self._items.values())
+            return sum(
+                graph_id is None or item.graph_id == graph_id for item in self._items.values()
+            )
 
 
 class InMemoryThreadRepository:
@@ -93,7 +102,9 @@ class InMemoryThreadRepository:
             if self._items.pop(str(thread_id), None) is None:
                 raise RuntimeFailure(ErrorCode.RESOURCE_NOT_FOUND, f"thread not found: {thread_id}")
 
-    async def count(self, *, metadata: dict[str, object] | None = None, status: str | None = None) -> int:
+    async def count(
+        self, *, metadata: dict[str, object] | None = None, status: str | None = None
+    ) -> int:
         return len(await self.search(metadata=metadata, status=status, limit=100000, offset=0))
 
     async def search(
@@ -109,9 +120,13 @@ class InMemoryThreadRepository:
                 thread
                 for thread in self._items.values()
                 if (status is None or thread.status.value == status)
-                and all(thread.metadata.get(key) == value for key, value in (metadata or {}).items())
+                and all(
+                    thread.metadata.get(key) == value for key, value in (metadata or {}).items()
+                )
             ]
-            items.sort(key=lambda item: item.created_at or datetime.min.replace(tzinfo=UTC), reverse=True)
+            items.sort(
+                key=lambda item: item.created_at or datetime.min.replace(tzinfo=UTC), reverse=True
+            )
             return tuple(items[offset : offset + limit])
 
 
@@ -185,7 +200,9 @@ class InMemoryRunRepository:
                 and str(run.thread_id) == str(thread_id)
                 and (status is None or run.status.value == status)
             ]
-            items.sort(key=lambda item: item.created_at or datetime.min.replace(tzinfo=UTC), reverse=True)
+            items.sort(
+                key=lambda item: item.created_at or datetime.min.replace(tzinfo=UTC), reverse=True
+            )
             return tuple(items[offset : offset + limit])
 
     def _active_for_thread(self, thread_id: str) -> Run | None:

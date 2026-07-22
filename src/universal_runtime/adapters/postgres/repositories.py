@@ -68,6 +68,7 @@ class PostgresAssistantRepository:
             # The first committed row is the authoritative registration.
             return await self.get(str(assistant.assistant_id))
         return await self.get(str(assistant.assistant_id))
+
     async def get(self, assistant_id: str) -> Assistant:
         async with self._sessions() as session:
             row = await session.get(AssistantRow, str(assistant_id))
@@ -118,7 +119,9 @@ class PostgresAssistantRepository:
             )
             rows = result.all()
             if not rows:
-                raise RuntimeFailure(ErrorCode.RESOURCE_NOT_FOUND, f"assistant not found: {assistant_id}")
+                raise RuntimeFailure(
+                    ErrorCode.RESOURCE_NOT_FOUND, f"assistant not found: {assistant_id}"
+                )
             return tuple(self._to_assistant(row, version) for row, version in rows)
 
     async def update(self, assistant_id: str, assistant: Assistant) -> Assistant:
@@ -126,7 +129,9 @@ class PostgresAssistantRepository:
             async with session.begin():
                 row = await session.get(AssistantRow, str(assistant_id))
                 if row is None or row.application_id != self._application_id:
-                    raise RuntimeFailure(ErrorCode.RESOURCE_NOT_FOUND, f"assistant not found: {assistant_id}")
+                    raise RuntimeFailure(
+                        ErrorCode.RESOURCE_NOT_FOUND, f"assistant not found: {assistant_id}"
+                    )
                 result = await session.execute(
                     text(
                         "SELECT COALESCE(MAX(version), 0) + 1 FROM rt_core.assistant_versions "
@@ -161,7 +166,10 @@ class PostgresAssistantRepository:
                 row = await session.get(AssistantRow, str(assistant_id))
                 version_row = await session.get(AssistantVersionRow, f"{assistant_id}:{version}")
                 if row is None or row.application_id != self._application_id or version_row is None:
-                    raise RuntimeFailure(ErrorCode.RESOURCE_NOT_FOUND, f"assistant version not found: {assistant_id}/{version}")
+                    raise RuntimeFailure(
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        f"assistant version not found: {assistant_id}/{version}",
+                    )
                 row.active_version = version
         return await self.get(str(assistant_id))
 
@@ -171,9 +179,13 @@ class PostgresAssistantRepository:
             async with session.begin():
                 row = await session.get(AssistantRow, str(assistant_id))
                 if row is None or row.application_id != self._application_id:
-                    raise RuntimeFailure(ErrorCode.RESOURCE_NOT_FOUND, f"assistant not found: {assistant_id}")
+                    raise RuntimeFailure(
+                        ErrorCode.RESOURCE_NOT_FOUND, f"assistant not found: {assistant_id}"
+                    )
                 await session.execute(
-                    text("DELETE FROM rt_core.assistant_versions WHERE assistant_id = :assistant_id"),
+                    text(
+                        "DELETE FROM rt_core.assistant_versions WHERE assistant_id = :assistant_id"
+                    ),
                     {"assistant_id": str(assistant_id)},
                 )
                 await session.delete(row)
@@ -192,8 +204,13 @@ class PostgresAssistantRepository:
     def _to_assistant(row: AssistantRow, version: AssistantVersionRow) -> Assistant:
         metadata = dict(version.metadata_json)
         return Assistant(
-            AssistantId.parse(row.id), row.graph_id, version.version,
-            metadata.pop("name", None), version.config, version.context, metadata,
+            AssistantId.parse(row.id),
+            row.graph_id,
+            version.version,
+            metadata.pop("name", None),
+            version.config,
+            version.context,
+            metadata,
         )
 
 
@@ -214,7 +231,9 @@ class PostgresApplicationConfigRepository:
             )
             item = result.mappings().first()
             if item is None:
-                raise RuntimeFailure(ErrorCode.RESOURCE_NOT_FOUND, f"active config not found: {application_id}")
+                raise RuntimeFailure(
+                    ErrorCode.RESOURCE_NOT_FOUND, f"active config not found: {application_id}"
+                )
             return ConfigRevision(
                 application_id,
                 int(item["revision_number"]),
@@ -330,7 +349,9 @@ class PostgresThreadRepository:
             async with session.begin():
                 row = await session.get(ThreadRow, str(thread_id))
                 if row is None:
-                    raise RuntimeFailure(ErrorCode.RESOURCE_NOT_FOUND, f"thread not found: {thread_id}")
+                    raise RuntimeFailure(
+                        ErrorCode.RESOURCE_NOT_FOUND, f"thread not found: {thread_id}"
+                    )
                 await session.delete(row)
 
     async def count(
@@ -348,7 +369,9 @@ class PostgresThreadRepository:
         offset: int = 0,
     ) -> tuple[Thread, ...]:
         async with self._sessions() as session:
-            query = select(ThreadRow).order_by(ThreadRow.created_at.desc()).limit(limit).offset(offset)
+            query = (
+                select(ThreadRow).order_by(ThreadRow.created_at.desc()).limit(limit).offset(offset)
+            )
             if status is not None:
                 query = query.where(ThreadRow.status == status)
             rows = (await session.execute(query)).scalars().all()
@@ -361,7 +384,9 @@ class PostgresThreadRepository:
                     row.updated_at,
                 )
                 for row in rows
-                if all(row.metadata_json.get(key) == value for key, value in (metadata or {}).items())
+                if all(
+                    row.metadata_json.get(key) == value for key, value in (metadata or {}).items()
+                )
             ]
             return tuple(items)
 

@@ -16,7 +16,6 @@ from universal_runtime.adapters.kafka import AioKafkaRunCommandQueue, TopicNames
 from universal_runtime.adapters.langgraph import LangGraphAdapter
 from universal_runtime.adapters.langgraph.persistence import postgres_persistence
 from universal_runtime.adapters.postgres.database import create_engine, create_session_factory
-from universal_runtime.adapters.postgres.events import PostgresEventJournal
 from universal_runtime.adapters.postgres.langgraph import managed_langgraph_persistence
 from universal_runtime.adapters.postgres.repositories import (
     PostgresRunRepository,
@@ -24,8 +23,39 @@ from universal_runtime.adapters.postgres.repositories import (
 )
 from universal_runtime.bootstrap.runtime_config import LauncherConfig
 from universal_runtime.domain.errors import ErrorCode, RuntimeFailure
-from universal_runtime.domain.events import RuntimeEventDraft, RuntimeEventType
+from universal_runtime.domain.events import RuntimeEventType
 from universal_runtime.domain.execution import RunError, RunStatus
+
+TERMINAL_EVENT_TYPES = {
+    RuntimeEventType.RUN_COMPLETED,
+    RuntimeEventType.RUN_FAILED,
+    RuntimeEventType.RUN_CANCELLED,
+    RuntimeEventType.RUN_INTERRUPTED,
+}
+
+FINAL_STATUSES = {
+    RunStatus.SUCCESS,
+    RunStatus.ERROR,
+    RunStatus.TIMEOUT,
+    RunStatus.CANCELLED,
+    RunStatus.INTERRUPTED,
+}
+
+
+def _identity_to_proto(identity: Any) -> Any:
+    from universal_runtime.adapters.grpc.generated.runtime.v1 import execution_pb2
+
+    return execution_pb2.ExecutionIdentity(
+        workspace_id=str(identity.scope.workspace_id),
+        project_id=str(identity.scope.project_id),
+        application_id=str(identity.scope.application_id),
+        revision_id=str(identity.scope.revision_id),
+        deployment_id=str(identity.scope.deployment_id),
+        assistant_id=str(identity.assistant_id),
+        thread_id=str(identity.thread_id) if identity.thread_id else "",
+        run_id=str(identity.run_id),
+        attempt_id=str(identity.attempt_id),
+    )
 
 
 def create_server(
@@ -91,7 +121,6 @@ async def _serve(config: LauncherConfig) -> None:
     session_factory = create_session_factory(engine)
     runs = PostgresRunRepository(session_factory)
     threads = PostgresThreadRepository(session_factory)
-    events = PostgresEventJournal(session_factory)
     instance_id = os.environ.get("UR_INSTANCE_ID", "worker")
 
     queue: AioKafkaRunCommandQueue | None = None
@@ -117,96 +146,152 @@ async def _serve(config: LauncherConfig) -> None:
         _queue = queue
         if _queue is None:
             return
-        while not stop.is_set():
-            try:
-                receipt = await _queue.receive(_worker_id())
 
-                run = await runs.get(str(receipt.identity.run_id))
-                if run.status is not RunStatus.PENDING:
-                    await _queue.acknowledge(receipt)
-                    continue
+        gateway_target = os.environ.get("UR_GATEWAY_GRPC_TARGET")
+        gateway_channel = None
+        if gateway_target:
+            import grpc
 
-                await runs.update(run.mark_running(datetime.now(UTC)))
-                adapter_obj = adapters.get(str(receipt.identity.assistant_id))
-                if adapter_obj is None:
-                    await _queue.acknowledge(receipt)
-                    continue
+            gateway_channel = grpc.aio.insecure_channel(gateway_target)
 
-                terminal = False
-                last_result: Any = None
+        try:
+            while not stop.is_set():
                 try:
-                    async for draft in adapter_obj.stream(receipt.command.request):
-                        await events.append(draft)
-                        if draft.type is RuntimeEventType.STATE_VALUES:
-                            last_result = draft.data
-                        if draft.type in {
-                            RuntimeEventType.RUN_COMPLETED,
-                            RuntimeEventType.RUN_FAILED,
-                            RuntimeEventType.RUN_CANCELLED,
-                            RuntimeEventType.RUN_INTERRUPTED,
-                        }:
-                            terminal = True
-                            current = await runs.get(str(run.run_id))
-                            if draft.type is RuntimeEventType.RUN_COMPLETED:
-                                await runs.update(current.complete(last_result, datetime.now(UTC)))
-                            elif draft.type is RuntimeEventType.RUN_CANCELLED:
-                                await runs.update(current.cancel(datetime.now(UTC)))
-                            elif draft.type is RuntimeEventType.RUN_INTERRUPTED:
-                                await runs.update(
-                                    type(current)(
-                                        current.identity,
-                                        RunStatus.INTERRUPTED,
-                                        current.metadata,
-                                        current.created_at,
-                                        datetime.now(UTC),
-                                        current.result,
-                                        current.error,
-                                    )
-                                )
-                            else:
-                                await runs.update(
-                                    current.fail(
-                                        RunError("FRAMEWORK_EXECUTION_FAILED", str(draft.data)),
-                                        datetime.now(UTC),
-                                    )
-                                )
-                            if current.thread_id is not None:
-                                thread = await threads.get(str(current.thread_id))
-                                if draft.type is RuntimeEventType.RUN_INTERRUPTED:
-                                    await threads.update(thread.mark_interrupted(datetime.now(UTC)))
-                                else:
-                                    await threads.update(thread.mark_idle(datetime.now(UTC)))
-                    if not terminal:
-                        current = await runs.get(str(run.run_id))
-                        await runs.update(current.complete(last_result, datetime.now(UTC)))
-                    if run.thread_id is not None:
-                        thread = await threads.get(str(run.thread_id))
-                        await threads.update(thread.mark_idle(datetime.now(UTC)))
-                except Exception as exc:
-                    current = await runs.get(str(run.run_id))
-                    await events.append(
-                        RuntimeEventDraft(
-                            receipt.identity,
-                            RuntimeEventType.RUN_FAILED,
-                            data={"error": str(exc)},
-                        )
-                    )
-                    if current.status not in {
-                        RunStatus.SUCCESS,
-                        RunStatus.ERROR,
-                        RunStatus.TIMEOUT,
-                        RunStatus.CANCELLED,
-                        RunStatus.INTERRUPTED,
-                    }:
-                        await runs.update(
-                            current.fail(RunError("EXECUTION_FAILED", str(exc)), datetime.now(UTC))
-                        )
-                await _queue.acknowledge(receipt)
-            except asyncio.CancelledError:
-                break
-            except RuntimeFailure as exc:
-                if exc.code is ErrorCode.QUEUE_CLOSED:
+                    receipt = await _queue.receive(_worker_id())
+
+                    run = await runs.get(str(receipt.identity.run_id))
+                    if run.status is not RunStatus.PENDING:
+                        await _queue.acknowledge(receipt)
+                        continue
+
+                    await runs.update(run.mark_running(datetime.now(UTC)))
+                    adapter_obj = adapters.get(str(receipt.identity.assistant_id))
+                    if adapter_obj is None:
+                        await _queue.acknowledge(receipt)
+                        continue
+
+                    await _execute_one(receipt, run, adapter_obj, gateway_channel)
+                    await _queue.acknowledge(receipt)
+                except asyncio.CancelledError:
                     break
+                except RuntimeFailure as exc:
+                    if exc.code is ErrorCode.QUEUE_CLOSED:
+                        break
+        finally:
+            if gateway_channel is not None:
+                await gateway_channel.close()
+
+    async def _execute_one(receipt: Any, run: Any, adapter_obj: Any, channel: Any) -> None:
+        if channel is None:
+            await _execute_local(receipt, run, adapter_obj)
+        else:
+            await _execute_with_grpc(receipt, run, adapter_obj, channel)
+
+    async def _execute_local(receipt: Any, run: Any, adapter_obj: Any) -> None:
+        terminal = False
+        last_result: Any = None
+        try:
+            async for draft in adapter_obj.stream(receipt.command.request):
+                if draft.type is RuntimeEventType.STATE_VALUES:
+                    last_result = draft.data
+                if draft.type in TERMINAL_EVENT_TYPES:
+                    terminal = True
+                    await _apply_terminal(run, draft, last_result)
+            if not terminal:
+                current = await runs.get(str(run.run_id))
+                await runs.update(current.complete(last_result, datetime.now(UTC)))
+            if run.thread_id is not None:
+                thread = await threads.get(str(run.thread_id))
+                await threads.update(thread.mark_idle(datetime.now(UTC)))
+        except Exception as exc:
+            current = await runs.get(str(run.run_id))
+            if current.status not in FINAL_STATUSES:
+                await runs.update(
+                    current.fail(RunError("EXECUTION_FAILED", str(exc)), datetime.now(UTC))
+                )
+
+    async def _execute_with_grpc(receipt: Any, run: Any, adapter_obj: Any, channel: Any) -> None:
+        from google.protobuf import struct_pb2
+
+        from universal_runtime.adapters.grpc.generated.runtime.v1 import (
+            execution_pb2,
+            worker_pb2_grpc,
+        )
+        from universal_runtime.adapters.grpc.payloads import python_to_value
+
+        stub = worker_pb2_grpc.EventIngressServiceStub(channel)
+        identity_proto = _identity_to_proto(run.identity)
+
+        async def _event_stream() -> Any:
+            seq = 0
+            last_result: Any = None
+            terminal = False
+            try:
+                async for draft in adapter_obj.stream(receipt.command.request):
+                    pe = execution_pb2.RuntimeEvent(
+                        type=str(draft.type),
+                        sequence=seq,
+                        namespace=list(draft.namespace),
+                        data=python_to_value(draft.data),
+                        native=struct_pb2.Struct(
+                            fields={k: python_to_value(v) for k, v in draft.native.items()}
+                        ),
+                    )
+                    pe.identity.CopyFrom(identity_proto)
+                    pe.timestamp.FromDatetime(datetime.now(UTC))
+                    yield pe
+                    seq += 1
+                    if draft.type is RuntimeEventType.STATE_VALUES:
+                        last_result = draft.data
+                    if draft.type in TERMINAL_EVENT_TYPES:
+                        terminal = True
+                        await _apply_terminal(run, draft, last_result)
+                if not terminal:
+                    current = await runs.get(str(run.run_id))
+                    await runs.update(current.complete(last_result, datetime.now(UTC)))
+                if run.thread_id is not None:
+                    thread = await threads.get(str(run.thread_id))
+                    await threads.update(thread.mark_idle(datetime.now(UTC)))
+            except Exception as exc:
+                current = await runs.get(str(run.run_id))
+                if current.status not in FINAL_STATUSES:
+                    await runs.update(
+                        current.fail(RunError("EXECUTION_FAILED", str(exc)), datetime.now(UTC))
+                    )
+
+        await stub.StreamEvents(_event_stream(), timeout=None)
+
+    async def _apply_terminal(run: Any, draft: Any, last_result: Any) -> None:
+        current = await runs.get(str(run.run_id))
+        if draft.type is RuntimeEventType.RUN_COMPLETED:
+            await runs.update(current.complete(last_result, datetime.now(UTC)))
+        elif draft.type is RuntimeEventType.RUN_CANCELLED:
+            await runs.update(current.cancel(datetime.now(UTC)))
+        elif draft.type is RuntimeEventType.RUN_INTERRUPTED:
+            await runs.update(
+                type(current)(
+                    current.identity,
+                    RunStatus.INTERRUPTED,
+                    current.metadata,
+                    current.created_at,
+                    datetime.now(UTC),
+                    current.result,
+                    current.error,
+                )
+            )
+        else:
+            await runs.update(
+                current.fail(
+                    RunError("FRAMEWORK_EXECUTION_FAILED", str(draft.data)),
+                    datetime.now(UTC),
+                )
+            )
+        if current.thread_id is not None:
+            thread = await threads.get(str(current.thread_id))
+            if draft.type is RuntimeEventType.RUN_INTERRUPTED:
+                await threads.update(thread.mark_interrupted(datetime.now(UTC)))
+            else:
+                await threads.update(thread.mark_idle(datetime.now(UTC)))
 
     async def _heartbeat_loop() -> None:
         from sqlalchemy import text
