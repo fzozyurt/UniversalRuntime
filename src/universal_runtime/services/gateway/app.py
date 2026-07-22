@@ -91,21 +91,23 @@ def create_app(
 
     @app.on_event("startup")
     async def start_local_execution() -> None:
-        if os.environ.get("UR_MIGRATE_ON_STARTUP", "").lower() == "true":
-            database_url = os.environ.get("UR_DATABASE_URL")
-            if database_url:
-                from universal_runtime.adapters.postgres.database import create_engine
-                from universal_runtime.adapters.postgres.migration import migrate_platform
+        database_url = os.environ.get("UR_DATABASE_URL")
+        if database_url and not app.state.migration_done:
+            from universal_runtime.adapters.postgres.database import create_engine
+            from universal_runtime.adapters.postgres.migration import migrate_platform
 
-                engine = create_engine(database_url)
-                try:
-                    await migrate_platform(
-                        engine,
-                        application_id=os.environ.get("UR_APPLICATION_ID", "default"),
-                        environment=os.environ.get("UR_KAFKA_ENVIRONMENT", "local"),
-                    )
-                finally:
-                    await engine.dispose()
+            engine = create_engine(database_url)
+            try:
+                done = await migrate_platform(
+                    engine,
+                    application_id=os.environ.get("UR_APPLICATION_ID", "default"),
+                    environment=os.environ.get("UR_KAFKA_ENVIRONMENT", "local"),
+                )
+                app.state.migration_done = done
+            finally:
+                await engine.dispose()
+        else:
+            app.state.migration_done = False
         await _auto_register_application(state, app)
         await state.start()
 
