@@ -960,14 +960,16 @@ async def _wait_for_run(state: LocalRuntime, run_id: RunId, adapter: Any = None)
             RunStatus.CANCELLED,
             RunStatus.INTERRUPTED,
         }:
-            if (
-                adapter is not None
-                and run.status is RunStatus.SUCCESS
-                and run.thread_id is not None
-            ):
+            if adapter is not None and run.status is RunStatus.SUCCESS:
                 state_data = await adapter.get_state(ExecutionRequest(identity=run.identity))
                 if state_data is not None:
-                    return _compat_state(state_data)
+                    if hasattr(state_data, "values"):
+                        vals: Any = state_data.values
+                        if isinstance(vals, dict):
+                            return vals
+                        return {"output": vals}
+                    if isinstance(state_data, dict):
+                        return state_data
             return _run_payload(run)
         await asyncio.sleep(0.05)
 
