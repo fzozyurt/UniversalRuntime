@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import logging
 import os
 
-_LOGGER = logging.getLogger(__name__)
+import structlog
+
 _initialized = False
 
 
@@ -12,8 +12,16 @@ def init_observability() -> None:
     if _initialized:
         return
     _initialized = True
+
+    from universal_runtime.telemetry.logging import configure_logging
+
+    configure_logging()
+
     if os.environ.get("UR_OBSERVABILITY_ENABLED", "").lower() != "true":
         return
+
+    logger = structlog.get_logger(__name__)
+
     try:
         import openlit
 
@@ -27,10 +35,10 @@ def init_observability() -> None:
             disable_metrics=False,
             disable_events=False,
         )
-        _LOGGER.info(
-            "observability initialized (service=%s, endpoint=%s)",
-            os.environ.get("OTEL_SERVICE_NAME", "universal-runtime"),
-            os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "none"),
+        logger.info(
+            "observability initialized",
+            service=os.environ.get("OTEL_SERVICE_NAME", "universal-runtime"),
+            otlp_endpoint=os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "none"),
         )
     except ImportError:
-        _LOGGER.warning("openlit is not installed; observability disabled")
+        logger.warning("openlit is not installed; observability disabled")

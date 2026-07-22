@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import Any
 
+import structlog
 from opentelemetry.trace import Span, Status, StatusCode
 
 
@@ -27,3 +28,9 @@ def record_failure(
     span.set_status(Status(StatusCode.ERROR, str(exception)))
     span.record_exception(exception)
     span.set_attribute("error.code", error_code)
+
+    structlog.get_logger(__name__).error(
+        "execution_failed",
+        error_code=error_code,
+        error=str(exception),
+    )
