@@ -12,7 +12,7 @@ from fastapi import Body, FastAPI, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from jsonschema import Draft202012Validator
 
 from universal_runtime.adapters.a2a.server import create_a2a_routes
@@ -641,8 +641,11 @@ def create_app(
 
     @app.get("/threads/{thread_id}/state/{checkpoint_id}")
     async def get_thread_state_checkpoint(thread_id: str, checkpoint_id: str) -> Any:
-        del checkpoint_id
-        return await get_thread_state(thread_id)
+        run = await _latest_thread_run(state, thread_id)
+        adapter = _runtime_adapter(state)
+        config = cast(JsonObject, {"configurable": {"checkpoint_id": checkpoint_id}})
+        request = ExecutionRequest(identity=run.identity, config=config)
+        return _compat_state(await adapter.get_state(request))
 
     @app.post("/threads/{thread_id}/state")
     async def update_thread_state(thread_id: str, payload: JsonObject = Body(...)) -> Any:
@@ -653,21 +656,46 @@ def create_app(
         return _compat_state(result)
 
     @app.post("/threads/{thread_id}/state/checkpoint")
-    async def update_thread_state_checkpoint(
+    async def get_thread_state_by_checkpoint(
         thread_id: str, payload: JsonObject = Body(...)
     ) -> Any:
-        return await update_thread_state(thread_id, payload)
+        run = await _latest_thread_run(state, thread_id)
+        adapter = _runtime_adapter(state)
+        checkpoint = cast("dict[str, Any]", payload.get("checkpoint", {}))
+        configurable: dict[str, Any] = {
+            "checkpoint_ns": checkpoint.get("checkpoint_ns", ""),
+            "checkpoint_id": checkpoint.get("checkpoint_id"),
+            "checkpoint_map": checkpoint.get("checkpoint_map", {}),
+        }
+        config = cast(
+            JsonObject,
+            {"configurable": {k: v for k, v in configurable.items() if v is not None}},
+        )
+        request = ExecutionRequest(identity=run.identity, config=config)
+        return _compat_state(await adapter.get_state(request))
 
     @app.get("/threads/{thread_id}/history")
     @app.post("/threads/{thread_id}/history")
     async def get_thread_history(thread_id: str, payload: JsonObject | None = Body(None)) -> Any:
-        del payload
         await state.threads.get(thread_id)
         run = await state.runs.latest_for_thread(thread_id)
         if run is None:
             return []
         adapter = _runtime_adapter(state)
-        history = await adapter.get_state_history(ExecutionRequest(identity=run.identity))
+        body = payload or {}
+        config: dict[str, Any] = {}
+        if "before" in body:
+            before_val = body["before"]
+            if isinstance(before_val, dict):
+                config["__history_before__"] = before_val
+            else:
+                config["__history_before__"] = {"configurable": {"checkpoint_id": str(before_val)}}
+        if "limit" in body:
+            config["__history_limit__"] = max(0, min(int(cast("int | str", body["limit"])), 1000))
+        if "metadata" in body:
+            config["__history_filter__"] = body["metadata"]
+        request = ExecutionRequest(identity=run.identity, config=config)
+        history = await adapter.get_state_history(request)
         return [_compat_state(item) for item in history]
 
     @app.get("/threads/{thread_id}")
@@ -707,6 +735,7 @@ def create_app(
             request=request,
             after_sequence=cursor,
             run_queues=app.state.run_queues,
+            thread_id=thread_id,
         )
 
     @app.get("/threads/{thread_id}/runs/{run_id}/stream")
@@ -725,6 +754,7 @@ def create_app(
             stream_mode or "values",
             request=request,
             run_queues=app.state.run_queues,
+            thread_id=thread_id,
         )
 
     @app.get("/threads/{thread_id}/stream")
@@ -738,6 +768,7 @@ def create_app(
             stream_mode or "values",
             request=request,
             run_queues=app.state.run_queues,
+            thread_id=thread_id,
         )
 
     @app.post("/runs/stream")
@@ -826,16 +857,97 @@ def create_app(
         adapter = _runtime_adapter(state)
         return await _wait_for_run(state, run.run_id, adapter)
 
-    @app.post("/runs/{run_id}/cancel", status_code=204)
-    async def cancel_run(run_id: str) -> None:
+    @app.post("/runs/{run_id}/cancel")
+    async def cancel_run(
+        run_id: str,
+        wait: bool = Query(False),
+        action: str = Query("interrupt"),
+    ) -> Any:
+        del action
         await state.execution.cancel_run(run_id)
+        if wait:
+            adapter = _runtime_adapter(state)
+            return await _wait_for_run(state, RunId.parse(run_id), adapter)
+        return Response(status_code=204)
 
-    @app.post("/threads/{thread_id}/runs/{run_id}/cancel", status_code=204)
-    async def cancel_thread_run(thread_id: str, run_id: str) -> None:
+    @app.post("/threads/{thread_id}/runs/{run_id}/cancel")
+    async def cancel_thread_run(
+        thread_id: str,
+        run_id: str,
+        wait: bool = Query(False),
+        action: str = Query("interrupt"),
+    ) -> Any:
+        del action
         run = await state.runs.get(run_id)
         if run.thread_id is None or str(run.thread_id) != thread_id:
             raise RuntimeFailure(ErrorCode.RESOURCE_NOT_FOUND, "run does not belong to thread")
         await state.execution.cancel_run(run_id)
+        if wait:
+            adapter = _runtime_adapter(state)
+            return await _wait_for_run(state, RunId.parse(run_id), adapter)
+        return Response(status_code=204)
+
+    @app.put("/store/items", status_code=204)
+    async def store_put_item(payload: JsonObject = Body(...)) -> None:
+        adapter = _runtime_adapter(state)
+        putter = getattr(adapter, "store_put", None)
+        if putter is None:
+            raise RuntimeFailure(ErrorCode.CAPABILITY_NOT_SUPPORTED, "store is not available")
+        namespace = cast(list[str], payload.get("namespace", []))
+        key = str(payload.get("key", ""))
+        value = cast(dict[str, Any], payload.get("value", {}))
+        index = payload.get("index")
+        await putter(namespace, key, value, index=index)
+
+    @app.get("/store/items")
+    async def store_get_item(
+        namespace: str = Query(...),
+        key: str = Query(...),
+    ) -> dict[str, Any] | None:
+        adapter = _runtime_adapter(state)
+        getter = getattr(adapter, "store_get", None)
+        if getter is None:
+            raise RuntimeFailure(ErrorCode.CAPABILITY_NOT_SUPPORTED, "store is not available")
+        return cast("dict[str, Any] | None", await getter(namespace.split("."), key))
+
+    @app.delete("/store/items", status_code=204)
+    async def store_delete_item(payload: JsonObject = Body(...)) -> None:
+        adapter = _runtime_adapter(state)
+        deleter = getattr(adapter, "store_delete", None)
+        if deleter is None:
+            raise RuntimeFailure(ErrorCode.CAPABILITY_NOT_SUPPORTED, "store is not available")
+        namespace = cast(list[str], payload.get("namespace", []))
+        key = str(payload.get("key", ""))
+        await deleter(namespace, key)
+
+    @app.post("/store/items/search")
+    async def store_search_items(payload: JsonObject = Body(...)) -> dict[str, Any]:
+        adapter = _runtime_adapter(state)
+        searcher = getattr(adapter, "store_search", None)
+        if searcher is None:
+            raise RuntimeFailure(ErrorCode.CAPABILITY_NOT_SUPPORTED, "store is not available")
+        namespace_prefix = cast(list[str], payload.get("namespace_prefix", []))
+        filter_dict = payload.get("filter")
+        limit = max(0, min(int(cast("int | str", payload.get("limit", 10))), 1000))
+        offset = max(0, int(cast("int | str", payload.get("offset", 0))))
+        return cast("dict[str, Any]", await searcher(
+            namespace_prefix, filter_dict=filter_dict, limit=limit, offset=offset
+        ))
+
+    @app.post("/store/namespaces")
+    async def store_list_namespaces(payload: JsonObject = Body(...)) -> dict[str, Any]:
+        adapter = _runtime_adapter(state)
+        lister = getattr(adapter, "store_list_namespaces", None)
+        if lister is None:
+            raise RuntimeFailure(ErrorCode.CAPABILITY_NOT_SUPPORTED, "store is not available")
+        prefix = payload.get("prefix")
+        suffix = payload.get("suffix")
+        max_depth = payload.get("max_depth")
+        limit = max(0, min(int(cast("int | str", payload.get("limit", 100))), 1000))
+        offset = max(0, int(cast("int | str", payload.get("offset", 0))))
+        return cast("dict[str, Any]", await lister(
+            prefix=prefix, suffix=suffix, max_depth=max_depth, limit=limit, offset=offset
+        ))
 
     return app
 
@@ -1049,6 +1161,7 @@ def _sse_response(
     native: bool = False,
     after_sequence: int | None = None,
     run_queues: dict[str, list[asyncio.Queue[Any]]] | None = None,
+    thread_id: str | None = None,
 ) -> StreamingResponse:
     selected_modes = {mode} if isinstance(mode, str) else set(mode)
     cursor_text = request.headers.get("last-event-id")
@@ -1061,6 +1174,13 @@ def _sse_response(
             ) from exc
     if after_sequence < -1:
         raise RuntimeFailure(ErrorCode.STREAM_CURSOR_INVALID, "Last-Event-ID must be >= 0")
+
+    headers: dict[str, str] = {
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    }
+    if thread_id is not None:
+        headers["Content-Location"] = f"/threads/{thread_id}/runs/{run_id}/stream"
 
     if run_queues is not None:
         queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=10000)
@@ -1105,7 +1225,7 @@ def _sse_response(
         return StreamingResponse(
             stream_from_queue(),
             media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            headers=headers,
         )
 
     async def stream() -> Any:
@@ -1131,7 +1251,7 @@ def _sse_response(
     return StreamingResponse(
         stream(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers=headers,
     )
 
 
@@ -1220,8 +1340,8 @@ def _thread_payload(thread: Any) -> JsonObject:
         "metadata": thread.metadata,
         "created_at": thread.created_at.isoformat() if thread.created_at else None,
         "updated_at": thread.updated_at.isoformat() if thread.updated_at else None,
-        "values": {},
-        "interrupts": {},
+        "values": None,
+        "interrupts": None,
     }
 
 

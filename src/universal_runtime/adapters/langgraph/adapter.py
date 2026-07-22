@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import replace
-from typing import Any
+from typing import Any, cast
 
 from universal_runtime.adapters.langgraph.config_mapper import map_config
 from universal_runtime.adapters.langgraph.descriptor import LangGraphDescriptor
@@ -248,7 +248,12 @@ class LangGraphAdapter:
             raise LangGraphAdapterError(
                 LangGraphErrorCode.CAPABILITY_NOT_SUPPORTED, "state history is not supported"
             )
-        return await get_state_history(self._graph, map_config(request))
+        before = cast("dict[str, Any] | None", request.config.get("__history_before__"))
+        limit = cast("int | None", request.config.get("__history_limit__"))
+        filter_meta = cast("dict[str, Any] | None", request.config.get("__history_filter__"))
+        return await get_state_history(
+            self._graph, map_config(request), before=before, limit=limit, filter=filter_meta
+        )
 
     async def update_state(self, request: ExecutionRequest, values: Any) -> Any:
         if not self._manifest.capabilities.state_management or not hasattr(
@@ -258,6 +263,96 @@ class LangGraphAdapter:
                 LangGraphErrorCode.CAPABILITY_NOT_SUPPORTED, "state update is not supported"
             )
         return await self._graph.aupdate_state(map_config(request), values)
+
+    async def store_put(
+        self, namespace: list[str], key: str, value: dict[str, Any], index: Any = None
+    ) -> None:
+        store = getattr(self._graph, "store", None)
+        if store is None:
+            raise LangGraphAdapterError(
+                LangGraphErrorCode.CAPABILITY_NOT_SUPPORTED, "store is not available"
+            )
+        kwargs: dict[str, Any] = {}
+        if index is not None:
+            kwargs["index"] = index
+        await store.aput(tuple(namespace), key, value, **kwargs)
+
+    async def store_get(self, namespace: list[str], key: str) -> dict[str, Any] | None:
+        store = getattr(self._graph, "store", None)
+        if store is None:
+            raise LangGraphAdapterError(
+                LangGraphErrorCode.CAPABILITY_NOT_SUPPORTED, "store is not available"
+            )
+        item = await store.aget(tuple(namespace), key)
+        if item is None:
+            return None
+        return {
+            "namespace": list(item.namespace),
+            "key": item.key,
+            "value": item.value,
+            "created_at": item.created_at.isoformat() if item.created_at else None,
+            "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+        }
+
+    async def store_delete(self, namespace: list[str], key: str) -> None:
+        store = getattr(self._graph, "store", None)
+        if store is None:
+            raise LangGraphAdapterError(
+                LangGraphErrorCode.CAPABILITY_NOT_SUPPORTED, "store is not available"
+            )
+        await store.adelete(tuple(namespace), key)
+
+    async def store_search(
+        self,
+        namespace_prefix: list[str],
+        filter_dict: dict[str, Any] | None = None,
+        limit: int = 10,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        store = getattr(self._graph, "store", None)
+        if store is None:
+            raise LangGraphAdapterError(
+                LangGraphErrorCode.CAPABILITY_NOT_SUPPORTED, "store is not available"
+            )
+        items = [
+            {
+                "namespace": list(item.namespace),
+                "key": item.key,
+                "value": item.value,
+                "created_at": item.created_at.isoformat() if item.created_at else None,
+                "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+                "score": getattr(item, "score", None),
+            }
+            async for item in store.asearch(
+                tuple(namespace_prefix), filter=filter_dict, limit=limit, offset=offset
+            )
+        ]
+        return {"items": items}
+
+    async def store_list_namespaces(
+        self,
+        prefix: list[str] | None = None,
+        suffix: list[str] | None = None,
+        max_depth: int | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        store = getattr(self._graph, "store", None)
+        if store is None:
+            raise LangGraphAdapterError(
+                LangGraphErrorCode.CAPABILITY_NOT_SUPPORTED, "store is not available"
+            )
+        namespaces = [
+            list(ns)
+            async for ns in store.alist_namespaces(
+                prefix=tuple(prefix) if prefix else None,
+                suffix=tuple(suffix) if suffix else None,
+                max_depth=max_depth,
+                limit=limit,
+                offset=offset,
+            )
+        ]
+        return {"namespaces": namespaces}
 
     async def resume(self, request: ExecutionRequest, value: Any) -> Any:
         if not self._manifest.capabilities.resume:

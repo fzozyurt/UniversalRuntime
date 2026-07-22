@@ -19,13 +19,27 @@ async def get_state(graph: Any, config: dict[str, Any]) -> Any:
         ) from exc
 
 
-async def get_state_history(graph: Any, config: dict[str, Any]) -> Any:
+async def get_state_history(
+    graph: Any,
+    config: dict[str, Any],
+    *,
+    before: dict[str, Any] | None = None,
+    limit: int | None = None,
+    filter: dict[str, Any] | None = None,
+) -> Any:
     if not hasattr(graph, "aget_state_history"):
         raise LangGraphAdapterError(
             LangGraphErrorCode.CAPABILITY_NOT_SUPPORTED, "state history is not supported"
         )
     try:
-        return [item async for item in graph.aget_state_history(config)]
+        kwargs: dict[str, Any] = {}
+        if before is not None:
+            kwargs["before"] = before
+        if limit is not None:
+            kwargs["limit"] = limit
+        if filter is not None:
+            kwargs["filter"] = filter
+        return [item async for item in graph.aget_state_history(config, **kwargs)]
     except ValueError as exc:
         raise LangGraphAdapterError(
             LangGraphErrorCode.CAPABILITY_NOT_SUPPORTED,
