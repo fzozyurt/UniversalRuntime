@@ -130,13 +130,17 @@ class AioKafkaRunCommandQueue(RunCommandQueue):
         self._leases: dict[str, Any] = {}
         self._lease_seconds = 60
 
-    async def _start(self, *, consumer: bool) -> None:
+    async def _ensure_producer(self) -> None:
         if self._producer is None:
             self._producer = AIOKafkaProducer(bootstrap_servers=self._bootstrap_servers)
             await self._producer.start()
-        if consumer and self._consumer is None:
+
+    async def _ensure_consumer(self) -> None:
+        await self._ensure_producer()
+        if self._consumer is None:
             instance = AIOKafkaConsumer(
                 TopicNames.run_topic_for(self._prefix, self._application_id, 100),
+                TopicNames.run_topic_for(self._prefix, self._application_id, 50),
                 TopicNames.run_topic_for(self._prefix, self._application_id, 10),
                 bootstrap_servers=self._bootstrap_servers,
                 group_id=self._group_id,
@@ -151,14 +155,14 @@ class AioKafkaRunCommandQueue(RunCommandQueue):
             self._consumer = instance
 
     async def publish(self, command: RunCommand) -> None:
-        await self._start(consumer=False)
+        await self._ensure_producer()
         assert self._producer is not None
         topic = TopicNames.run_topic_for(
             self._prefix,
             str(command.identity.application_id),
             int(command.priority),
         )
-        await self._producer.send_and_wait(
+        await self._producer.send(
             topic,
             _json_command(command),
             key=PartitionKey.for_command(command).encode(),
@@ -170,7 +174,7 @@ class AioKafkaRunCommandQueue(RunCommandQueue):
 
     async def receive(self, worker_id: WorkerId) -> RunCommandReceipt:
         del worker_id
-        await self._start(consumer=True)
+        await self._ensure_consumer()
         assert self._consumer is not None
         message = await self._consumer.getone()
         command = _command(message.value)
