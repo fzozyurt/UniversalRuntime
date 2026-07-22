@@ -17,8 +17,8 @@ from universal_runtime.adapters.postgres.migration import migrate_platform
 from universal_runtime.adapters.postgres.models import (
     OutboxEventRow,
     PlatformBase,
+    RunCommandRow,
     RunRow,
-    RuntimeEventBatchRow,
     ThreadRow,
 )
 from universal_runtime.adapters.postgres.schema import SchemaNames
@@ -116,13 +116,13 @@ async def test_postgres_restart_state_and_idempotency() -> None:
                 )
             )
             session.add(
-                RuntimeEventBatchRow(
+                RunCommandRow(
                     id="batch-1",
+                    command_id="batch-1",
                     run_id="run-1",
-                    batch_sequence=0,
-                    first_sequence=0,
-                    last_sequence=0,
-                    events=[{"type": "run.completed"}],
+                    payload={"type": "run.completed"},
+                    priority=100,
+                    available_at=now,
                 )
             )
             session.add(
@@ -145,8 +145,8 @@ async def test_postgres_restart_state_and_idempotency() -> None:
             assert run.attempt_id == "attempt"
             assert run.result == {"ok": True}
             assert (
-                await session.execute(select(RuntimeEventBatchRow))
-            ).scalar_one().last_sequence == 0
+                await session.execute(select(RunCommandRow).where(RunCommandRow.id == "batch-1"))
+            ).scalar_one().priority == 100
             duplicate = OutboxEventRow(
                 id="outbox-2",
                 event_id="event-1",
