@@ -60,7 +60,7 @@ def test_topics_and_partition_key() -> None:
     )
     assert topics.short_queue == "x.prod.runs.short_queue"
     assert topics.long_queue == "custom.long_queue"
-    assert PartitionKey.for_command(command("run", QueuePriority.INTERACTIVE)) == "a:thread"
+    assert PartitionKey.for_command(command("run", QueuePriority.INTERACTIVE)) == "a:run"
 
 
 @pytest.mark.asyncio

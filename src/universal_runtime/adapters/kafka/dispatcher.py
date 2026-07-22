@@ -23,8 +23,7 @@ class PartitionKey:
     @staticmethod
     def for_command(command: RunCommand) -> str:
         identity = command.identity
-        lineage = identity.thread_id or identity.run_id
-        return f"{identity.application_id}:{lineage}"
+        return f"{identity.application_id}:{identity.run_id}"
 
 
 class InMemoryKafkaTransport:
