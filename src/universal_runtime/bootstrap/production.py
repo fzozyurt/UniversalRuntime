@@ -7,7 +7,6 @@ from universal_runtime.adapters.kafka import AioKafkaRunCommandQueue
 from universal_runtime.adapters.memory.capacity import ExecutionCapacity
 from universal_runtime.adapters.memory.registry import InMemoryAdapterRegistry
 from universal_runtime.adapters.postgres.database import create_engine, create_session_factory
-from universal_runtime.adapters.postgres.events import PostgresEventJournal
 from universal_runtime.adapters.postgres.repositories import (
     PostgresApplicationConfigRepository,
     PostgresAssistantRepository,
@@ -33,7 +32,6 @@ def create_production_runtime() -> LocalRuntime:
     )
     threads = PostgresThreadRepository(sessions)
     runs = PostgresRunRepository(sessions)
-    events = PostgresEventJournal(sessions)
     commands = AioKafkaRunCommandQueue(
         bootstrap_servers=os.environ.get("UR_KAFKA_BOOTSTRAP_SERVERS", "kafka:9092"),
         prefix=os.environ.get("UR_TOPIC_PREFIX", "rt"),
@@ -50,7 +48,6 @@ def create_production_runtime() -> LocalRuntime:
         outbox=None,
         threads=cast(Any, threads),
         runs=cast(Any, runs),
-        events=cast(Any, events),
         commands=commands,
         adapters=adapters,
         capacity=capacity,
@@ -58,9 +55,6 @@ def create_production_runtime() -> LocalRuntime:
             threads=threads,
             runs=runs,
             commands=commands,
-            journal=events,
-            replay=events,
-            subscription=events,
             adapters=adapters,
             capacity=capacity,
         ),

@@ -40,7 +40,7 @@ class RuntimeExecutionService:
         threads: ThreadRepository,
         runs: RunRepository,
         commands: RunCommandQueue,
-        journal: EventJournal,
+        journal: EventJournal | None = None,
         replay: EventReplay | None = None,
         subscription: EventSubscription | None = None,
         outbox: OutboxRepository | None = None,
@@ -90,13 +90,14 @@ class RuntimeExecutionService:
         created = await self._runs.create(run)
         try:
             selected_outbox = outbox or self._outbox
-            await self._journal.append(
-                RuntimeEventDraft(
-                    request.identity,
-                    RuntimeEventType.RUN_QUEUED,
-                    data={"assistant_id": str(request.identity.assistant_id)},
+            if self._journal is not None:
+                await self._journal.append(
+                    RuntimeEventDraft(
+                        request.identity,
+                        RuntimeEventType.RUN_QUEUED,
+                        data={"assistant_id": str(request.identity.assistant_id)},
+                    )
                 )
-            )
             if selected_outbox is not None:
                 await selected_outbox.append(
                     OutboxMessage(
@@ -163,13 +164,14 @@ class RuntimeExecutionService:
         if run.thread_id is not None:
             thread = await self._threads.get(str(run.thread_id))
             await self._threads.update(thread.mark_idle(_now()))
-        await self._journal.append(
-            RuntimeEventDraft(
-                run.identity,
-                RuntimeEventType.RUN_CANCELLED,
-                data={"run_id": str(run.run_id), "status": str(cancelled.status)},
+        if self._journal is not None:
+            await self._journal.append(
+                RuntimeEventDraft(
+                    run.identity,
+                    RuntimeEventType.RUN_CANCELLED,
+                    data={"run_id": str(run.run_id), "status": str(cancelled.status)},
+                )
             )
-        )
         return cancelled
 
     async def resume_run(self, request: ExecutionRequest) -> Run:
@@ -187,9 +189,10 @@ class RuntimeExecutionService:
                 created_at=now,
             )
         )
-        await self._journal.append(
-            RuntimeEventDraft(run.identity, RuntimeEventType.RUN_QUEUED, data={"resume": True})
-        )
+        if self._journal is not None:
+            await self._journal.append(
+                RuntimeEventDraft(run.identity, RuntimeEventType.RUN_QUEUED, data={"resume": True})
+            )
         return run
 
     async def start_worker(self) -> None:

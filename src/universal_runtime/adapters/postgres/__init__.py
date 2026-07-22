@@ -37,8 +37,6 @@ from universal_runtime.adapters.postgres.models import (
     RunCommandRow,
     RunLifecycleEventRow,
     RunRow,
-    RuntimeEventBatchRow,
-    RuntimeEventRow,
     ThreadRow,
     WorkerLeaseRow,
     WorkerRow,
@@ -67,8 +65,6 @@ __all__ = [
     "RunCommandRow",
     "RunLifecycleEventRow",
     "RunRow",
-    "RuntimeEventBatchRow",
-    "RuntimeEventRow",
     "SchemaNames",
     "ThreadRow",
     "WorkerLeaseRow",
@@ -87,6 +83,3 @@ __all__ = [
     "migrate_platform",
     "migration_lock_key",
 ]
-
-
-from universal_runtime.adapters.postgres.events import PostgresEventJournal

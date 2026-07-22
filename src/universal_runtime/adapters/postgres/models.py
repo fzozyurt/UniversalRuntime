@@ -195,40 +195,15 @@ class RunCommandRow(AuditMixin, PlatformBase):
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
-class RuntimeEventRow(AuditMixin, PlatformBase):
-    __tablename__ = "runtime_events"
-    __table_args__ = (
-        UniqueConstraint("run_id", "sequence"),
-        UniqueConstraint("event_id"),
-        {"schema": DEFAULT_SCHEMAS.execution},
-    )
+class ArtifactRow(AuditMixin, PlatformBase):
+    __tablename__ = "artifacts"
+    __table_args__ = ({"schema": DEFAULT_SCHEMAS.execution},)
 
     id: Mapped[str] = mapped_column(String(255), primary_key=True)
     run_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    event_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
-    event_type: Mapped[str] = mapped_column(String(128), nullable=False)
-    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    identity_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    namespace: Mapped[list[str]] = mapped_column(JSON, nullable=False)
-    data: Mapped[Any] = mapped_column(JSON, nullable=False)
-    trace: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    native: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-
-
-class RuntimeEventBatchRow(AuditMixin, PlatformBase):
-    __tablename__ = "runtime_event_batches"
-    __table_args__ = (
-        UniqueConstraint("run_id", "batch_sequence"),
-        {"schema": DEFAULT_SCHEMAS.execution},
-    )
-
-    id: Mapped[str] = mapped_column(String(255), primary_key=True)
-    run_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    batch_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
-    first_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
-    last_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
-    events: Mapped[list[Any]] = mapped_column(JSON, nullable=False)
+    kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    uri: Mapped[str] = mapped_column(String(2048), nullable=False)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, nullable=False)
 
 
 class OutboxEventRow(AuditMixin, PlatformBase):
@@ -311,17 +286,6 @@ class WorkerLeaseRow(AuditMixin, PlatformBase):
     run_id: Mapped[str] = mapped_column(String(255), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-
-
-class ArtifactRow(AuditMixin, PlatformBase):
-    __tablename__ = "artifacts"
-    __table_args__ = ({"schema": DEFAULT_SCHEMAS.execution},)
-
-    id: Mapped[str] = mapped_column(String(255), primary_key=True)
-    run_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    kind: Mapped[str] = mapped_column(String(64), nullable=False)
-    uri: Mapped[str] = mapped_column(String(2048), nullable=False)
-    metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, nullable=False)
 
 
 class ApplicationMigrationRow(AuditMixin, PlatformBase):
