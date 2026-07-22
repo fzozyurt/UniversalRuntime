@@ -141,9 +141,8 @@ class AioKafkaRunCommandQueue(RunCommandQueue):
         await self._ensure_producer()
         if self._consumer is None:
             instance = AIOKafkaConsumer(
-                TopicNames.run_topic_for(self._prefix, self._application_id, 100),
-                TopicNames.run_topic_for(self._prefix, self._application_id, 50),
-                TopicNames.run_topic_for(self._prefix, self._application_id, 10),
+                TopicNames.run_topic_for(self._prefix, self._application_id, QueuePriority.INTERACTIVE),
+                TopicNames.run_topic_for(self._prefix, self._application_id, QueuePriority.BATCH),
                 bootstrap_servers=self._bootstrap_servers,
                 group_id=self._group_id,
                 enable_auto_commit=False,
