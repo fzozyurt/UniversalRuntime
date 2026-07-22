@@ -83,6 +83,9 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    from universal_runtime.telemetry.fastapi_middleware import RequestLogMiddleware
+
+    app.add_middleware(RequestLogMiddleware)  # type: ignore[arg-type]
     app.state.runtime = state
     app.state.worker_registry = {}
 
