@@ -119,9 +119,11 @@ async def _serve(config: LauncherConfig) -> None:
     loop.add_signal_handler(signal.SIGTERM, stop.set)
     loop.add_signal_handler(signal.SIGINT, stop.set)
 
+    max_conc = int(os.environ.get("UR_WORKER_MAX_CONCURRENCY", "8"))
+    exec_sem = asyncio.Semaphore(max_conc)
+
     async def _execution_loop() -> None:
-        _queue = queue
-        if _queue is None:
+        if queue is None:
             return
         import grpc
 
@@ -130,19 +132,13 @@ async def _serve(config: LauncherConfig) -> None:
         try:
             while not stop.is_set():
                 try:
-                    receipt = await _queue.receive(
+                    receipt = await queue.receive(
                         WorkerId.parse(os.environ.get("UR_INSTANCE_ID", "all"))
                     )
-                    run = await runs.get(str(receipt.identity.run_id))
-                    if run.status is not RunStatus.PENDING:
-                        await _queue.acknowledge(receipt)
-                        continue
-                    await runs.update(run.mark_running(datetime.now(UTC)))
-                    identity = receipt.identity
-                    await _send_events_to_gateway(
-                        ch, adapter, identity, receipt.command.request, runs, threads
+                    await exec_sem.acquire()
+                    _ = asyncio.create_task(  # noqa: RUF006
+                        _process_receipt(receipt, exec_sem, ch, adapter, runs, threads)
                     )
-                    await _queue.acknowledge(receipt)
                 except asyncio.CancelledError:
                     break
                 except RuntimeFailure as exc:
@@ -150,6 +146,27 @@ async def _serve(config: LauncherConfig) -> None:
                         break
         finally:
             await ch.close()
+
+    async def _process_receipt(
+        receipt: Any,
+        sem: asyncio.Semaphore,
+        ch: Any,
+        adapter_obj: Any,
+        rs: Any,
+        ts: Any,
+    ) -> None:
+        try:
+            run = await rs.get(str(receipt.identity.run_id))
+            if run.status is not RunStatus.PENDING:
+                await queue.acknowledge(receipt)
+                return
+            await rs.update(run.mark_running(datetime.now(UTC)))
+            await _send_events_to_gateway(
+                ch, adapter_obj, receipt.identity, receipt.command.request, rs, ts
+            )
+            await queue.acknowledge(receipt)
+        finally:
+            sem.release()
 
     try:
         await worker.start_listening("127.0.0.1", config.grpc_port)

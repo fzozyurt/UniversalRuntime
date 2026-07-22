@@ -140,11 +140,12 @@ async def _serve(config: LauncherConfig) -> None:
     for adapter in adapters.values():
         await _register_with_gateway(adapter, config)
 
+    max_conc = int(os.environ.get("UR_WORKER_MAX_CONCURRENCY", "8"))
+    exec_sem = asyncio.Semaphore(max_conc)
     stop = asyncio.Event()
 
     async def _execution_loop() -> None:
-        _queue = queue
-        if _queue is None:
+        if queue is None:
             return
 
         gateway_target = os.environ.get("UR_GATEWAY_GRPC_TARGET")
@@ -157,21 +158,11 @@ async def _serve(config: LauncherConfig) -> None:
         try:
             while not stop.is_set():
                 try:
-                    receipt = await _queue.receive(_worker_id())
-
-                    run = await runs.get(str(receipt.identity.run_id))
-                    if run.status is not RunStatus.PENDING:
-                        await _queue.acknowledge(receipt)
-                        continue
-
-                    await runs.update(run.mark_running(datetime.now(UTC)))
-                    adapter_obj = adapters.get(str(receipt.identity.assistant_id))
-                    if adapter_obj is None:
-                        await _queue.acknowledge(receipt)
-                        continue
-
-                    await _execute_one(receipt, run, adapter_obj, gateway_channel)
-                    await _queue.acknowledge(receipt)
+                    receipt = await queue.receive(_worker_id())
+                    await exec_sem.acquire()
+                    _ = asyncio.create_task(  # noqa: RUF006
+                        _process_receipt(receipt, exec_sem, gateway_channel)
+                    )
                 except asyncio.CancelledError:
                     break
                 except RuntimeFailure as exc:
@@ -181,36 +172,29 @@ async def _serve(config: LauncherConfig) -> None:
             if gateway_channel is not None:
                 await gateway_channel.close()
 
-    async def _execute_one(receipt: Any, run: Any, adapter_obj: Any, channel: Any) -> None:
-        if channel is None:
-            await _execute_local(receipt, run, adapter_obj)
-        else:
-            await _execute_with_grpc(receipt, run, adapter_obj, channel)
-
-    async def _execute_local(receipt: Any, run: Any, adapter_obj: Any) -> None:
-        terminal = False
-        last_result: Any = None
+    async def _process_receipt(receipt: Any, sem: asyncio.Semaphore, gateway_channel: Any) -> None:
         try:
-            async for draft in adapter_obj.stream(receipt.command.request):
-                if draft.type is RuntimeEventType.STATE_VALUES:
-                    last_result = draft.data
-                if draft.type in TERMINAL_EVENT_TYPES:
-                    terminal = True
-                    await _apply_terminal(run, draft, last_result)
-            if not terminal:
-                current = await runs.get(str(run.run_id))
-                await runs.update(current.complete(last_result, datetime.now(UTC)))
-            if run.thread_id is not None:
-                thread = await threads.get(str(run.thread_id))
-                await threads.update(thread.mark_idle(datetime.now(UTC)))
-        except Exception as exc:
-            current = await runs.get(str(run.run_id))
-            if current.status not in FINAL_STATUSES:
-                await runs.update(
-                    current.fail(RunError("EXECUTION_FAILED", str(exc)), datetime.now(UTC))
-                )
+            run = await runs.get(str(receipt.identity.run_id))
+            if run.status is not RunStatus.PENDING:
+                await queue.acknowledge(receipt)
+                return
+            await runs.update(run.mark_running(datetime.now(UTC)))
+            adapter_obj = adapters.get(str(receipt.identity.assistant_id))
+            if adapter_obj is None:
+                await queue.acknowledge(receipt)
+                return
 
-    async def _execute_with_grpc(receipt: Any, run: Any, adapter_obj: Any, channel: Any) -> None:
+            # Convert draft events to proto for gRPC streaming
+            if gateway_channel is not None:
+                await _stream_via_grpc(receipt, run, adapter_obj, gateway_channel)
+            else:
+                await _stream_local(receipt, run, adapter_obj)
+
+            await queue.acknowledge(receipt)
+        finally:
+            sem.release()
+
+    async def _stream_via_grpc(receipt: Any, run: Any, adapter_obj: Any, channel: Any) -> None:
         from google.protobuf import struct_pb2
 
         from universal_runtime.adapters.grpc.generated.runtime.v1 import (
@@ -222,10 +206,8 @@ async def _serve(config: LauncherConfig) -> None:
         stub = worker_pb2_grpc.EventIngressServiceStub(channel)
         identity_proto = _identity_to_proto(run.identity)
 
-        async def _event_stream() -> Any:
+        async def _gen() -> Any:
             seq = 0
-            last_result: Any = None
-            terminal = False
             try:
                 async for draft in adapter_obj.stream(receipt.command.request):
                     pe = execution_pb2.RuntimeEvent(
@@ -241,34 +223,33 @@ async def _serve(config: LauncherConfig) -> None:
                     pe.timestamp.FromDatetime(datetime.now(UTC))
                     yield pe
                     seq += 1
-                    if draft.type is RuntimeEventType.STATE_VALUES:
-                        last_result = draft.data
-                    if draft.type in TERMINAL_EVENT_TYPES:
-                        terminal = True
-                        await _apply_terminal(run, draft, last_result)
-                if not terminal:
-                    current = await runs.get(str(run.run_id))
-                    await runs.update(current.complete(last_result, datetime.now(UTC)))
-                if run.thread_id is not None:
-                    thread = await threads.get(str(run.thread_id))
-                    await threads.update(thread.mark_idle(datetime.now(UTC)))
+                    await _maybe_take_action(run, draft, runs, threads)
             except Exception as exc:
-                current = await runs.get(str(run.run_id))
-                if current.status not in FINAL_STATUSES:
-                    await runs.update(
-                        current.fail(RunError("EXECUTION_FAILED", str(exc)), datetime.now(UTC))
-                    )
+                await _fail_if_not_done(run, exc, runs)
 
-        await stub.StreamEvents(_event_stream(), timeout=None)
+        await stub.StreamEvents(_gen(), timeout=None)
+        await _mark_idle_if_needed(run, runs, threads)
 
-    async def _apply_terminal(run: Any, draft: Any, last_result: Any) -> None:
-        current = await runs.get(str(run.run_id))
+    async def _stream_local(receipt: Any, run: Any, adapter_obj: Any) -> None:
+        try:
+            async for draft in adapter_obj.stream(receipt.command.request):
+                await _maybe_take_action(run, draft, runs, threads)
+        except Exception as exc:
+            await _fail_if_not_done(run, exc, runs)
+        await _mark_idle_if_needed(run, runs, threads)
+
+    async def _maybe_take_action(run: Any, draft: Any, rs: Any, ts: Any) -> None:
+        if draft.type is RuntimeEventType.STATE_VALUES:
+            return
+        if draft.type not in TERMINAL_EVENT_TYPES:
+            return
+        current = await rs.get(str(run.run_id))
         if draft.type is RuntimeEventType.RUN_COMPLETED:
-            await runs.update(current.complete(last_result, datetime.now(UTC)))
+            await rs.update(current.complete(draft.data, datetime.now(UTC)))
         elif draft.type is RuntimeEventType.RUN_CANCELLED:
-            await runs.update(current.cancel(datetime.now(UTC)))
+            await rs.update(current.cancel(datetime.now(UTC)))
         elif draft.type is RuntimeEventType.RUN_INTERRUPTED:
-            await runs.update(
+            await rs.update(
                 type(current)(
                     current.identity,
                     RunStatus.INTERRUPTED,
@@ -280,18 +261,29 @@ async def _serve(config: LauncherConfig) -> None:
                 )
             )
         else:
-            await runs.update(
+            await rs.update(
                 current.fail(
                     RunError("FRAMEWORK_EXECUTION_FAILED", str(draft.data)),
                     datetime.now(UTC),
                 )
             )
         if current.thread_id is not None:
-            thread = await threads.get(str(current.thread_id))
+            thread = await ts.get(str(current.thread_id))
             if draft.type is RuntimeEventType.RUN_INTERRUPTED:
-                await threads.update(thread.mark_interrupted(datetime.now(UTC)))
+                await ts.update(thread.mark_interrupted(datetime.now(UTC)))
             else:
-                await threads.update(thread.mark_idle(datetime.now(UTC)))
+                await ts.update(thread.mark_idle(datetime.now(UTC)))
+
+    async def _fail_if_not_done(run: Any, exc: Exception, rs: Any) -> None:
+        current = await rs.get(str(run.run_id))
+        if current.status not in FINAL_STATUSES:
+            await rs.update(current.fail(RunError("EXECUTION_FAILED", str(exc)), datetime.now(UTC)))
+
+    async def _mark_idle_if_needed(run: Any, rs: Any, ts: Any) -> None:
+        current = await rs.get(str(run.run_id))
+        if current.thread_id is not None:
+            thread = await ts.get(str(current.thread_id))
+            await ts.update(thread.mark_idle(datetime.now(UTC)))
 
     async def _heartbeat_loop() -> None:
         from sqlalchemy import text
