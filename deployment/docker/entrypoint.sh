@@ -11,7 +11,8 @@ set -- universal-runtime "$MODE" "$@"
 
 if [ "${UR_OBSERVABILITY_ENABLED:-false}" = "true" ] && command -v opentelemetry-instrument >/dev/null 2>&1; then
   export OTEL_RESOURCE_ATTRIBUTES="${OTEL_RESOURCE_ATTRIBUTES:-}"
-  OTEL_RESOURCE_ATTRIBUTES="${OTEL_RESOURCE_ATTRIBUTES}service.name=${MODE}"
+  APP_NAME="${UR_APPLICATION_NAME:-${UR_APPLICATION_ID:-universal-runtime}}"
+  OTEL_RESOURCE_ATTRIBUTES="${OTEL_RESOURCE_ATTRIBUTES}service.name=${APP_NAME}-${MODE}"
   _delim=","
   if [ -n "${POD_NAME:-}" ]; then
     OTEL_RESOURCE_ATTRIBUTES="${OTEL_RESOURCE_ATTRIBUTES}${_delim}pod.name=${POD_NAME}"
