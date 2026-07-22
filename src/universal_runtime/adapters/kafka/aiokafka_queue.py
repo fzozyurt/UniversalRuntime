@@ -113,9 +113,17 @@ def _command(payload: bytes) -> RunCommand:
 class AioKafkaRunCommandQueue(RunCommandQueue):
     """Durable production command queue backed by Kafka consumer groups."""
 
-    def __init__(self, *, bootstrap_servers: str, topics: TopicNames, group_id: str) -> None:
+    def __init__(
+        self,
+        *,
+        bootstrap_servers: str,
+        prefix: str,
+        application_id: str,
+        group_id: str,
+    ) -> None:
         self._bootstrap_servers = bootstrap_servers
-        self._topics = topics
+        self._prefix = prefix
+        self._application_id = application_id
         self._group_id = group_id
         self._producer: AIOKafkaProducer | None = None
         self._consumer: AIOKafkaConsumer | None = None
@@ -128,9 +136,8 @@ class AioKafkaRunCommandQueue(RunCommandQueue):
             await self._producer.start()
         if consumer and self._consumer is None:
             instance = AIOKafkaConsumer(
-                self._topics.interactive,
-                self._topics.normal,
-                self._topics.batch,
+                TopicNames.run_topic_for(self._prefix, self._application_id, 100),
+                TopicNames.run_topic_for(self._prefix, self._application_id, 10),
                 bootstrap_servers=self._bootstrap_servers,
                 group_id=self._group_id,
                 enable_auto_commit=False,
@@ -146,11 +153,11 @@ class AioKafkaRunCommandQueue(RunCommandQueue):
     async def publish(self, command: RunCommand) -> None:
         await self._start(consumer=False)
         assert self._producer is not None
-        topic = {
-            QueuePriority.INTERACTIVE: self._topics.interactive,
-            QueuePriority.NORMAL: self._topics.normal,
-            QueuePriority.BATCH: self._topics.batch,
-        }[command.priority]
+        topic = TopicNames.run_topic_for(
+            self._prefix,
+            str(command.identity.application_id),
+            int(command.priority),
+        )
         await self._producer.send_and_wait(
             topic,
             _json_command(command),

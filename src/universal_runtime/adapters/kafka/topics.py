@@ -3,12 +3,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from universal_runtime.domain.execution.priority import QueuePriority
+
 
 @dataclass(frozen=True, slots=True)
 class TopicNames:
-    interactive: str
-    normal: str
-    batch: str
+    short_queue: str
+    long_queue: str
     execution_events: str
     lifecycle: str
     commands: str
@@ -27,14 +28,13 @@ class TopicNames:
             raise ValueError("topic prefix and environment must not be empty")
         root = f"{prefix}.{environment}"
         defaults = {
-            "interactive": f"{root}.runs.interactive.v1",
-            "normal": f"{root}.runs.normal.v1",
-            "batch": f"{root}.runs.batch.v1",
-            "execution_events": f"{root}.execution.events.v1",
-            "lifecycle": f"{root}.run.lifecycle.v1",
-            "commands": f"{root}.run.commands.v1",
-            "audit": f"{root}.audit.events.v1",
-            "deadletter": f"{root}.deadletter.v1",
+            "short_queue": f"{root}.runs.short_queue",
+            "long_queue": f"{root}.runs.long_queue",
+            "execution_events": f"{root}.execution.events",
+            "lifecycle": f"{root}.run.lifecycle",
+            "commands": f"{root}.run.commands",
+            "audit": f"{root}.audit.events",
+            "deadletter": f"{root}.deadletter",
         }
         if overrides:
             unknown = set(overrides).difference(defaults)
@@ -46,12 +46,20 @@ class TopicNames:
 
     def as_dict(self) -> dict[str, str]:
         return {
-            "interactive": self.interactive,
-            "normal": self.normal,
-            "batch": self.batch,
+            "short_queue": self.short_queue,
+            "long_queue": self.long_queue,
             "execution_events": self.execution_events,
             "lifecycle": self.lifecycle,
             "commands": self.commands,
             "audit": self.audit,
             "deadletter": self.deadletter,
         }
+
+    @staticmethod
+    def run_topic_for(
+        prefix: str,
+        application_id: str,
+        priority: int = 100,
+    ) -> str:
+        queue = "short_queue" if priority >= QueuePriority.NORMAL else "long_queue"
+        return f"{prefix}.{application_id}.runs.{queue}"

@@ -6,16 +6,26 @@ import os
 import signal
 from collections.abc import Callable
 from dataclasses import asdict
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 
 from universal_runtime.adapters.grpc import WorkerServer
+from universal_runtime.adapters.kafka import AioKafkaRunCommandQueue, TopicNames
 from universal_runtime.adapters.langgraph import LangGraphAdapter
 from universal_runtime.adapters.langgraph.persistence import postgres_persistence
-from universal_runtime.adapters.postgres.database import create_engine
+from universal_runtime.adapters.postgres.database import create_engine, create_session_factory
+from universal_runtime.adapters.postgres.events import PostgresEventJournal
 from universal_runtime.adapters.postgres.langgraph import managed_langgraph_persistence
+from universal_runtime.adapters.postgres.repositories import (
+    PostgresRunRepository,
+    PostgresThreadRepository,
+)
 from universal_runtime.bootstrap.runtime_config import LauncherConfig
+from universal_runtime.domain.errors import ErrorCode, RuntimeFailure
+from universal_runtime.domain.events import RuntimeEventDraft, RuntimeEventType
+from universal_runtime.domain.execution import RunError, RunStatus
 
 
 def create_server(
@@ -78,18 +88,171 @@ async def _serve(config: LauncherConfig) -> None:
             await _conn.execute(text("SELECT 1"))
             await _conn.commit()
 
+    session_factory = create_session_factory(engine)
+    runs = PostgresRunRepository(session_factory)
+    threads = PostgresThreadRepository(session_factory)
+    events = PostgresEventJournal(session_factory)
+    instance_id = os.environ.get("UR_INSTANCE_ID", "worker")
+
+    queue: AioKafkaRunCommandQueue | None = None
+    kafka_servers = os.environ.get("UR_KAFKA_BOOTSTRAP_SERVERS")
+    if kafka_servers:
+        prefix = os.environ.get("UR_TOPIC_PREFIX", "rt")
+        app_id = os.environ.get("UR_APPLICATION_ID", "default")
+        queue = AioKafkaRunCommandQueue(
+            bootstrap_servers=kafka_servers,
+            prefix=prefix,
+            application_id=app_id,
+            group_id=f"{app_id}.worker",
+        )
+
     server = create_server(adapters, migrate_app=_migrate_app)
     await server.start_listening(config.grpc_host, config.grpc_port)
     for adapter in adapters.values():
         await _register_with_gateway(adapter, config)
-    stopped = asyncio.Event()
+
+    stop = asyncio.Event()
+
+    async def _execution_loop() -> None:
+        _queue = queue
+        if _queue is None:
+            return
+        while not stop.is_set():
+            try:
+                receipt = await _queue.receive(_worker_id())
+
+                run = await runs.get(str(receipt.identity.run_id))
+                if run.status is not RunStatus.PENDING:
+                    await _queue.acknowledge(receipt)
+                    continue
+
+                await runs.update(run.mark_running(datetime.now(UTC)))
+                adapter_obj = adapters.get(str(receipt.identity.assistant_id))
+                if adapter_obj is None:
+                    await _queue.acknowledge(receipt)
+                    continue
+
+                terminal = False
+                last_result: Any = None
+                try:
+                    async for draft in adapter_obj.stream(receipt.command.request):
+                        await events.append(draft)
+                        if draft.type is RuntimeEventType.STATE_VALUES:
+                            last_result = draft.data
+                        if draft.type in {
+                            RuntimeEventType.RUN_COMPLETED,
+                            RuntimeEventType.RUN_FAILED,
+                            RuntimeEventType.RUN_CANCELLED,
+                            RuntimeEventType.RUN_INTERRUPTED,
+                        }:
+                            terminal = True
+                            current = await runs.get(str(run.run_id))
+                            if draft.type is RuntimeEventType.RUN_COMPLETED:
+                                await runs.update(current.complete(last_result, datetime.now(UTC)))
+                            elif draft.type is RuntimeEventType.RUN_CANCELLED:
+                                await runs.update(current.cancel(datetime.now(UTC)))
+                            elif draft.type is RuntimeEventType.RUN_INTERRUPTED:
+                                await runs.update(
+                                    type(current)(
+                                        current.identity,
+                                        RunStatus.INTERRUPTED,
+                                        current.metadata,
+                                        current.created_at,
+                                        datetime.now(UTC),
+                                        current.result,
+                                        current.error,
+                                    )
+                                )
+                            else:
+                                await runs.update(
+                                    current.fail(
+                                        RunError("FRAMEWORK_EXECUTION_FAILED", str(draft.data)),
+                                        datetime.now(UTC),
+                                    )
+                                )
+                            if current.thread_id is not None:
+                                thread = await threads.get(str(current.thread_id))
+                                if draft.type is RuntimeEventType.RUN_INTERRUPTED:
+                                    await threads.update(thread.mark_interrupted(datetime.now(UTC)))
+                                else:
+                                    await threads.update(thread.mark_idle(datetime.now(UTC)))
+                    if not terminal:
+                        current = await runs.get(str(run.run_id))
+                        await runs.update(current.complete(last_result, datetime.now(UTC)))
+                    if run.thread_id is not None:
+                        thread = await threads.get(str(run.thread_id))
+                        await threads.update(thread.mark_idle(datetime.now(UTC)))
+                except Exception as exc:
+                    current = await runs.get(str(run.run_id))
+                    await events.append(
+                        RuntimeEventDraft(
+                            receipt.identity,
+                            RuntimeEventType.RUN_FAILED,
+                            data={"error": str(exc)},
+                        )
+                    )
+                    if current.status not in {
+                        RunStatus.SUCCESS,
+                        RunStatus.ERROR,
+                        RunStatus.TIMEOUT,
+                        RunStatus.CANCELLED,
+                        RunStatus.INTERRUPTED,
+                    }:
+                        await runs.update(
+                            current.fail(RunError("EXECUTION_FAILED", str(exc)), datetime.now(UTC))
+                        )
+                await _queue.acknowledge(receipt)
+            except asyncio.CancelledError:
+                break
+            except RuntimeFailure as exc:
+                if exc.code is ErrorCode.QUEUE_CLOSED:
+                    break
+
+    async def _heartbeat_loop() -> None:
+        from sqlalchemy import text
+
+        _worker_id_str = instance_id
+        _app_id = os.environ.get("UR_APPLICATION_ID", "default")
+        while not stop.is_set():
+            try:
+                async with engine.begin() as conn:
+                    await conn.execute(
+                        text(
+                            """INSERT INTO rt_exec.workers (id, worker_id, deployment_id, status, capabilities, updated_at)
+                            VALUES (:id, :wid, :did, 'active', '{}', NOW())
+                            ON CONFLICT (worker_id) DO UPDATE SET status = 'active', updated_at = NOW()"""
+                        ),
+                        {"id": _worker_id_str, "wid": _worker_id_str, "did": _app_id},
+                    )
+            except Exception:
+                import logging
+
+                logging.getLogger(__name__).exception("heartbeat update failed")
+            await asyncio.sleep(15)
+
     loop = asyncio.get_running_loop()
-    loop.add_signal_handler(signal.SIGTERM, stopped.set)
-    loop.add_signal_handler(signal.SIGINT, stopped.set)
-    await stopped.wait()
-    await server.stop(config.worker_drain_timeout_seconds)
-    await context.__aexit__(None, None, None)
-    await engine.dispose()
+    loop.add_signal_handler(signal.SIGTERM, stop.set)
+    loop.add_signal_handler(signal.SIGINT, stop.set)
+
+    exec_task = asyncio.create_task(_execution_loop())
+    hb_task = asyncio.create_task(_heartbeat_loop())
+    try:
+        await stop.wait()
+    finally:
+        exec_task.cancel()
+        hb_task.cancel()
+        await asyncio.gather(exec_task, hb_task, return_exceptions=True)
+        await server.stop(config.worker_drain_timeout_seconds)
+        await context.__aexit__(None, None, None)
+        if queue is not None:
+            await queue.close()
+        await engine.dispose()
+
+
+def _worker_id() -> Any:
+    from universal_runtime.domain.identity import WorkerId
+
+    return WorkerId.parse(os.environ.get("UR_INSTANCE_ID", "worker"))
 
 
 async def _register_with_gateway(adapter: LangGraphAdapter, config: LauncherConfig) -> None:
@@ -98,16 +261,20 @@ async def _register_with_gateway(adapter: LangGraphAdapter, config: LauncherConf
         return
     instance_id = os.environ.get("UR_INSTANCE_ID", "worker")
     manifest = adapter.manifest
+    prefix = os.environ.get("UR_TOPIC_PREFIX", "rt")
+    app_id = os.environ.get("UR_APPLICATION_ID", "default")
     payload: dict[str, object] = {
         "worker_id": instance_id,
         "pod_name": os.environ.get("HOSTNAME", instance_id),
         "target": os.environ.get(
             "UR_WORKER_ADVERTISE_TARGET", f"{config.grpc_host}:{config.grpc_port}"
         ),
-        "application_id": os.environ.get("UR_APPLICATION_ID", "default"),
+        "application_id": app_id,
         "workspace_key": os.environ.get("UR_WORKSPACE_KEY", "default"),
         "app_version": os.environ.get("ARTIFACT_VERSION", "unknown"),
         "alembic_version": os.environ.get("ARTIFACT_VERSION", "unknown"),
+        "run_topic": os.environ.get("UR_RUN_TOPIC")
+        or TopicNames.run_topic_for(prefix, app_id, 100),
         "graph_id": adapter.descriptor.graph_id,
         "manifest": {
             "adapter_id": manifest.adapter_id,

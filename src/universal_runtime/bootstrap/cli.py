@@ -130,8 +130,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             from universal_runtime.services.all.main import main as service_main
         elif args.command == "gateway":
             from universal_runtime.services.gateway.main import main as service_main
-        elif args.command == "dispatcher":
-            from universal_runtime.services.dispatcher.main import main as service_main
         elif args.command == "projector":
             from universal_runtime.services.event_projector.main import main as service_main
         else:

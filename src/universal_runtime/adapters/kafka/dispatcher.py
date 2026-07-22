@@ -35,11 +35,9 @@ class InMemoryKafkaTransport:
         self.messages: list[KafkaMessage] = []
 
     async def publish(self, command: RunCommand) -> None:
-        topic = {
-            100: self.topics.interactive,
-            50: self.topics.normal,
-            10: self.topics.batch,
-        }[int(command.priority)]
+        topic = TopicNames.run_topic_for(
+            "rt", command.identity.application_id, int(command.priority)
+        )
         headers = (
             ("runtime-schema-version", "1"),
             ("event-id", str(command.command_id)),
