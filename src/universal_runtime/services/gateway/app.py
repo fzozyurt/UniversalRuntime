@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
+import orjson
 from fastapi import Body, FastAPI, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -1188,7 +1189,7 @@ def _sse_response(
 
         async def stream_from_queue() -> Any:
             if not native:
-                yield "event: metadata\ndata: " + json.dumps({"run_id": str(run_id)}) + "\n\n"
+                yield "event: metadata\ndata: " + orjson.dumps({"run_id": str(run_id)}).decode() + "\n\n"
             while True:
                 proto_event = await queue.get()
                 if proto_event is None:
@@ -1217,7 +1218,7 @@ def _sse_response(
                 yield (
                     f"id: {proto_event.sequence}\n"
                     f"event: {event_name}\n"
-                    f"data: {json.dumps(encoded, separators=(',', ':'))}\n\n"
+                    f"data: {orjson.dumps(encoded).decode()}\n\n"
                 )
             if not native:
                 yield "event: end\ndata: null\n\n"
@@ -1230,7 +1231,7 @@ def _sse_response(
 
     async def stream() -> Any:
         if not native:
-            yield "event: metadata\ndata: " + json.dumps({"run_id": str(run_id)}) + "\n\n"
+            yield "event: metadata\ndata: " + orjson.dumps({"run_id": str(run_id)}).decode() + "\n\n"
         async for event in state.events.subscribe(run_id, after_sequence=after_sequence):
             if native:
                 event_name = str(event.type)
@@ -1244,7 +1245,7 @@ def _sse_response(
                 else:
                     event_name = str(stream_mode)
                 encoded_payload = event.data
-            yield f"id: {event.sequence}\nevent: {event_name}\ndata: {json.dumps(encoded_payload, separators=(',', ':'))}\n\n"
+            yield f"id: {event.sequence}\nevent: {event_name}\ndata: {orjson.dumps(encoded_payload).decode()}\n\n"
         if not native:
             yield "event: end\ndata: null\n\n"
 

@@ -4,6 +4,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import orjson
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from aiokafka.structs import TopicPartition
 
@@ -39,7 +40,7 @@ from .topics import TopicNames
 def _json_command(command: RunCommand) -> bytes:
     identity = command.identity
     request = command.request
-    return json.dumps(
+    return orjson.dumps(
         {
             "command_id": str(command.command_id),
             "identity": {
@@ -67,8 +68,7 @@ def _json_command(command: RunCommand) -> bytes:
             "priority": int(command.priority),
             "created_at": command.created_at.isoformat(),
         },
-        separators=(",", ":"),
-    ).encode()
+    )
 
 
 def _command(payload: bytes) -> RunCommand:
