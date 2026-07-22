@@ -125,8 +125,6 @@ class AioKafkaRunCommandQueue(RunCommandQueue):
         self._prefix = prefix
         self._application_id = application_id
         self._group_id = group_id
-        self._short_topic = TopicNames.run_topic_for(prefix, application_id, 100)
-        self._long_topic = TopicNames.run_topic_for(prefix, application_id, 10)
         self._producer: AIOKafkaProducer | None = None
         self._consumer: AIOKafkaConsumer | None = None
         self._leases: dict[str, Any] = {}
@@ -138,8 +136,8 @@ class AioKafkaRunCommandQueue(RunCommandQueue):
             await self._producer.start()
         if consumer and self._consumer is None:
             instance = AIOKafkaConsumer(
-                self._short_topic,
-                self._long_topic,
+                TopicNames.run_topic_for(self._prefix, self._application_id, 100),
+                TopicNames.run_topic_for(self._prefix, self._application_id, 10),
                 bootstrap_servers=self._bootstrap_servers,
                 group_id=self._group_id,
                 enable_auto_commit=False,
