@@ -10,6 +10,9 @@ def main(*, run_forever: bool = True) -> int:
     config = LauncherConfig.from_environment()
     config.validate()
     if run_forever:
+        from universal_runtime.telemetry import init_observability
+
+        init_observability()
         uvicorn.run(
             create_app(),
             host=config.host,

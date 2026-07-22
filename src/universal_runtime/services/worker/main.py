@@ -36,6 +36,9 @@ def main(*, run_forever: bool = True) -> int:
 
 
 async def _serve(config: LauncherConfig) -> None:
+    from universal_runtime.telemetry import init_observability
+
+    init_observability()
     entrypoints = _entrypoints()
     database_url = os.environ["UR_DATABASE_URL"]
     engine = create_engine(

@@ -19,6 +19,14 @@ from universal_runtime.services.gateway.app import create_app
 
 async def _serve(config: LauncherConfig) -> None:
     """Run Gateway, Dispatcher and Worker in one process.
+ 
+    This is a compact deployment profile, not a local/in-memory shortcut.  It
+    retains Kafka, PostgreSQL and the gRPC worker boundary, and can be scaled by
+    running multiple identical ``all`` pods with distinct instance IDs.
+    """
+    from universal_runtime.telemetry import init_observability
+
+    init_observability()
 
     This is a compact deployment profile, not a local/in-memory shortcut.  It
     retains Kafka, PostgreSQL and the gRPC worker boundary, and can be scaled by
