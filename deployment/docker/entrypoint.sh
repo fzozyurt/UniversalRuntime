@@ -18,9 +18,16 @@ if [ "${UR_OBSERVABILITY_ENABLED:-false}" = "true" ] && command -v opentelemetry
   if [ -n "${POD_NAME:-}" ]; then
     OTEL_RESOURCE_ATTRIBUTES="${OTEL_RESOURCE_ATTRIBUTES}${_delim}pod.name=${POD_NAME}"
     _delim=","
+  elif [ -n "${HOSTNAME:-}" ]; then
+    OTEL_RESOURCE_ATTRIBUTES="${OTEL_RESOURCE_ATTRIBUTES}${_delim}pod.name=${HOSTNAME}"
+    _delim=","
   fi
   if [ -n "${NODE_NAME:-}" ]; then
     OTEL_RESOURCE_ATTRIBUTES="${OTEL_RESOURCE_ATTRIBUTES}${_delim}node.name=${NODE_NAME}"
+    _delim=","
+  fi
+  if [ -n "${ARTIFACT_VERSION:-}" ]; then
+    OTEL_RESOURCE_ATTRIBUTES="${OTEL_RESOURCE_ATTRIBUTES}${_delim}service.version=${ARTIFACT_VERSION}"
     _delim=","
   fi
   export OTEL_RESOURCE_ATTRIBUTES
