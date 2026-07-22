@@ -5,6 +5,7 @@ class RuntimeProfile(StrEnum):
     LANGGRAPH = "langgraph"
     LANGCHAIN_AGENT = "langchain-agent"
     DEEPAGENTS = "deepagents"
+    AGNO = "agno"
 
 
 class StreamMode(StrEnum):

@@ -16,6 +16,11 @@ class EventReplay(Protocol):
         self, run_id: RunId, *, after_sequence: int = -1
     ) -> tuple[RuntimeEvent, ...]: ...
 
+    async def replay_by_thread(
+        self, thread_id: str, *, after_sequence: int = -1, limit: int = 0
+    ) -> tuple[RuntimeEvent, ...]:
+        """Replay events for a thread across all runs."""
+
 
 class EventSubscription(Protocol):
     def subscribe(

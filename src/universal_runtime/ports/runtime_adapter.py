@@ -19,3 +19,9 @@ class RuntimeAdapter(Protocol):
     def stream(self, request: ExecutionRequest) -> AsyncIterator[RuntimeEventDraft]: ...
 
     async def cancel(self, request: ExecutionRequest) -> None: ...
+
+    async def get_state(self, request: ExecutionRequest) -> Any | None:
+        """Return the current framework-native state for the thread, or None."""
+
+    async def get_history(self, request: ExecutionRequest) -> Any | None:
+        """Return framework-native conversation history for the thread, or None."""

@@ -26,7 +26,7 @@ COPY --from=build /dist/*.whl /tmp/
 RUN python -m pip install --no-cache-dir /tmp/*.whl \
     && python -m pip install --no-cache-dir 'universal-runtime[langgraph,fastapi,kafka]' \
     && rm -f /tmp/*.whl
-COPY runtime.example.yaml /opt/universal-runtime/runtime.yaml
+COPY deployment/runtime.example.yaml /opt/universal-runtime/runtime.yaml
 COPY contracts /opt/universal-runtime/contracts
 COPY services /opt/universal-runtime/services
 COPY migrations /opt/universal-runtime/migrations

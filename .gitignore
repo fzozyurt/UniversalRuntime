@@ -38,13 +38,26 @@ artifacts/
 *.sqlite
 *.sqlite3
 
+# Duplicate skills (keep .opencode/skills/)
+skills/
+
+# AI agent prompts
+prompts/
+
+# IDE / agent project config
+.serena/
+
+# Tool config
+opencode.json
+
+# Templates
+templates/
+
 # Generated protobuf / OpenAPI clients
 generated/
 !src/universal_runtime/adapters/grpc/generated/
 !src/universal_runtime/adapters/grpc/generated/**/*.py
 contracts/generated/
-!src/universal_runtime/adapters/grpc/generated/
-!src/universal_runtime/adapters/grpc/generated/**/*.py
 
 # Docker / local data
 .local/

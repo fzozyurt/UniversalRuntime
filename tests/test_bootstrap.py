@@ -12,7 +12,7 @@ def test_launcher_info(capsys) -> None:
 
 
 def test_launcher_validates_example_config(capsys) -> None:
-    assert main(["validate-config", str(ROOT / "runtime.example.yaml")]) == 0
+    assert main(["validate-config", str(ROOT / "deployment" / "runtime.example.yaml")]) == 0
     assert "config: valid" in capsys.readouterr().out
 
 
@@ -28,7 +28,7 @@ def test_runtime_config_loader_resolves_and_redacts() -> None:
     from universal_runtime.configuration.loader import RuntimeConfigLoader
 
     loader = RuntimeConfigLoader(ROOT / "contracts/config/runtime-application.schema.json")
-    config = loader.load(ROOT / "runtime.example.yaml", environ={})
+    config = loader.load(ROOT / "deployment" / "runtime.example.yaml", environ={})
     assert config["apiVersion"] == "runtime.ai/v1alpha1"
     assert (
         loader.redact({"api_key": "secret", "nested": {"password": "hidden"}})["api_key"]

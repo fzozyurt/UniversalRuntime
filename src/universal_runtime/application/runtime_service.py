@@ -10,7 +10,13 @@ from universal_runtime.domain.errors import ErrorCode, RuntimeFailure
 from universal_runtime.domain.events import RuntimeEvent, RuntimeEventDraft, RuntimeEventType
 from universal_runtime.domain.execution import Run, RunError, RunStatus, Thread
 from universal_runtime.domain.execution.requests import ExecutionRequest, RunCommand
-from universal_runtime.domain.identity import CommandId, RunId, ThreadId, WorkerId
+from universal_runtime.domain.identity import (
+    CommandId,
+    ExecutionIdentity,
+    RunId,
+    ThreadId,
+    WorkerId,
+)
 from universal_runtime.domain.primitives.json_types import JsonObject, JsonValue
 from universal_runtime.ports.events import EventJournal, EventReplay, EventSubscription
 from universal_runtime.ports.outbox import OutboxMessage, OutboxRepository
@@ -341,3 +347,36 @@ class RuntimeExecutionService:
             RunId.parse(run_id), after_sequence=after_sequence
         ):
             yield event
+
+    async def get_thread_history(
+        self, thread_id: str, *, after_sequence: int = -1, limit: int = 0
+    ) -> tuple[RuntimeEvent, ...]:
+        if self._replay is None:
+            raise RuntimeFailure(ErrorCode.ADAPTER_NOT_SUPPORTED, "event replay is not configured")
+        return await self._replay.replay_by_thread(
+            thread_id, after_sequence=after_sequence, limit=limit
+        )
+
+    async def get_thread_state(
+        self, thread_id: str, adapter: RuntimeAdapter | None = None
+    ) -> JsonObject | None:
+        if adapter is not None and adapter.manifest.capabilities.state_management:
+            request = ExecutionRequest(
+                identity=ExecutionIdentity(
+                    scope=None,  # type: ignore[arg-type]
+                    assistant_id=None,  # type: ignore[arg-type]
+                    run_id=RunId.new(),
+                    attempt_id=None,  # type: ignore[arg-type]
+                    thread_id=ThreadId.parse(thread_id),
+                ),
+                config={"configurable": {"thread_id": thread_id}},
+            )
+            result = await adapter.get_state(request)
+            if result is not None:
+                return result
+        if self._replay is not None:
+            events = await self._replay.replay_by_thread(thread_id)
+            for event in reversed(events):
+                if event.type is RuntimeEventType.STATE_VALUES:
+                    return event.data  # type: ignore[return-value]
+        return None

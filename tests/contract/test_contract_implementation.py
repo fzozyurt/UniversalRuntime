@@ -25,7 +25,7 @@ def test_openapi_dto_shapes_match_contract_examples() -> None:
 
 def test_config_schema_accepts_example_and_rejects_unknown_fields() -> None:
     schema = json.loads((ROOT / "contracts/config/runtime-application.schema.json").read_text())
-    example = yaml.safe_load((ROOT / "runtime.example.yaml").read_text())
+    example = yaml.safe_load((ROOT / "deployment" / "runtime.example.yaml").read_text())
     Draft202012Validator(schema).validate(example)
     invalid = {**example, "unexpected": True}
     with pytest.raises(SchemaValidationError):

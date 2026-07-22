@@ -42,7 +42,7 @@ EXPECTED_OPERATION_IDS = {
 def main() -> None:
     schema_path = ROOT / "contracts/config/runtime-application.schema.json"
     event_path = ROOT / "contracts/events/runtime-event-v1.schema.json"
-    runtime_example_path = ROOT / "runtime.example.yaml"
+    runtime_example_path = ROOT / "deployment" / "runtime.example.yaml"
     openapi_path = OPENAPI_PATH
     scope_path = SCOPE_PATH
 
