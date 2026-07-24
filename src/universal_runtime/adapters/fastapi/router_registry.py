@@ -19,7 +19,7 @@ ExamplesResolver = Callable[[APIRoute], Mapping[str, Any]]
 @dataclass(frozen=True, slots=True)
 class RouterContext:
     app: FastAPI
-    runtime: Any
+    runtime: Any | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,27 +37,39 @@ def register_router_package(
 ) -> None:
     """Discover every ``routes.py`` below a package and include it deterministically.
 
-    A route module exports ``build_router(context, tag)``. The tag is derived from
-    its folder path, so ``routes/assistants/routes.py`` becomes ``Assistants`` and
-    ``routes/admin/audit/routes.py`` becomes ``Admin / Audit``. Modules may keep
-    protocol paths unchanged; folder prefixes are applied only when the module
-    explicitly opts into ``AUTO_PREFIX = True``.
+    A route module may export either ``build_router(context, tag)`` or a direct
+    ``router`` object. Folder names become tags and, for direct application
+    routers, become URL prefixes by default. Gateway compatibility routers opt
+    out with ``AUTO_PREFIX = False`` to preserve LangGraph SDK paths exactly.
     """
 
     package = importlib.import_module(package_name)
     modules = sorted(_route_modules(package), key=lambda module: module.__name__)
-    effective_context = context or RouterContext(app=app, runtime=app.state.runtime)
+    effective_context = context or RouterContext(
+        app=app,
+        runtime=getattr(app.state, "runtime", None),
+    )
     for module in modules:
         tag = folder_tag(module.__name__, package_name)
         builder = getattr(module, "build_router", None)
-        if builder is None:
-            raise RuntimeError(f"router module has no build_router(): {module.__name__}")
-        router = builder(effective_context, tag)
+        direct_router = getattr(module, "router", None)
+        if builder is not None:
+            router = builder(effective_context, tag)
+            default_auto_prefix = False
+            include_tags: list[str] | None = None
+        elif isinstance(direct_router, APIRouter):
+            router = direct_router
+            default_auto_prefix = True
+            include_tags = [tag]
+        else:
+            raise RuntimeError(
+                f"router module must export build_router() or router: {module.__name__}"
+            )
         if not isinstance(router, APIRouter):
-            raise TypeError(f"build_router() must return APIRouter: {module.__name__}")
-        auto_prefix = bool(getattr(module, "AUTO_PREFIX", False))
+            raise TypeError(f"router contract must return APIRouter: {module.__name__}")
+        auto_prefix = bool(getattr(module, "AUTO_PREFIX", default_auto_prefix))
         prefix = folder_prefix(module.__name__, package_name) if auto_prefix else ""
-        app.include_router(router, prefix=prefix)
+        app.include_router(router, prefix=prefix, tags=include_tags)
 
 
 def finalize_route_metadata(app: FastAPI) -> None:
@@ -90,6 +102,30 @@ def finalize_route_metadata(app: FastAPI) -> None:
             request_body["content"] = content
             extra["requestBody"] = request_body
             route.openapi_extra = extra
+
+
+def validate_openapi_contract(app: FastAPI) -> None:
+    """Fail application startup when documented endpoint metadata is incomplete."""
+
+    document = app.openapi()
+    errors: list[str] = []
+    for path, path_item in document.get("paths", {}).items():
+        for method, operation in path_item.items():
+            if method not in {"get", "post", "put", "patch", "delete", "options", "head"}:
+                continue
+            label = f"{method.upper()} {path}"
+            for field in ("operationId", "summary", "description", "tags"):
+                if not operation.get(field):
+                    errors.append(f"{label}: missing {field}")
+            request_body = operation.get("requestBody")
+            if request_body:
+                media = request_body.get("content", {}).get("application/json", {})
+                if not media.get("schema"):
+                    errors.append(f"{label}: request body has no schema")
+                if not media.get("examples") and not media.get("example"):
+                    errors.append(f"{label}: request body has no example")
+    if errors:
+        raise RuntimeError("invalid FastAPI/OpenAPI contract:\n" + "\n".join(errors))
 
 
 def extract_routes(
