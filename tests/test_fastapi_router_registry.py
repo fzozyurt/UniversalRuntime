@@ -26,8 +26,8 @@ def test_folder_router_registration_generates_paths_tags_and_operation_ids() -> 
     validate_openapi_contract(app)
 
     document = app.openapi()
-    create = document["paths"]["/assistants/"]["post"]
-    history = document["paths"]["/assistants/history/"]["get"]
+    create = document["paths"]["/assistants"]["post"]
+    history = document["paths"]["/assistants/history"]["get"]
 
     assert create["tags"] == ["Assistants"]
     assert create["operationId"] == "post_assistants"
