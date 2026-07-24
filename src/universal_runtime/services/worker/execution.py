@@ -31,7 +31,7 @@ FINAL_STATUSES = {
 async def process_receipt(
     receipt: Any,
     bounded_worker: Any,
-    gateway_channel: Any,
+    event_publisher: Any,
     queue: AioKafkaRunCommandQueue,
     adapters: dict[str, LangGraphAdapter],
     runs: Any,
@@ -58,10 +58,14 @@ async def process_receipt(
             return
 
         await runs.update(run.mark_running(datetime.now(UTC)))
-        if gateway_channel is not None:
-            await _stream_via_grpc(receipt, run, adapter, gateway_channel, runs, threads)
-        else:
-            await _stream_local(receipt, run, adapter, runs, threads)
+        await _stream_execution(
+            receipt,
+            run,
+            adapter,
+            event_publisher,
+            runs,
+            threads,
+        )
         await queue.acknowledge(receipt)
     except asyncio.CancelledError:
         await queue.reject(receipt, retryable=True)
@@ -73,65 +77,45 @@ async def process_receipt(
         bounded_worker.release()
 
 
-async def _stream_via_grpc(
+async def _stream_execution(
     receipt: Any,
     run: Any,
     adapter: Any,
-    channel: Any,
+    event_publisher: Any,
     runs: Any,
     threads: Any,
 ) -> None:
-    from google.protobuf import struct_pb2
-
-    from universal_runtime.adapters.grpc.generated.runtime.v1 import (
-        execution_pb2,
-        worker_pb2_grpc,
-    )
-    from universal_runtime.adapters.grpc.payloads import python_to_value
-
-    stub = worker_pb2_grpc.EventIngressServiceStub(channel)
-    identity_proto = _identity_to_proto(run.identity)
-
-    async def events() -> Any:
-        sequence = 0
-        try:
-            async for draft in adapter.stream(receipt.command.request):
-                event = execution_pb2.RuntimeEvent(
-                    type=str(draft.type),
-                    sequence=sequence,
-                    namespace=list(draft.namespace),
-                    data=python_to_value(draft.data),
-                    native=struct_pb2.Struct(
-                        fields={key: python_to_value(value) for key, value in draft.native.items()}
-                    ),
-                )
-                event.identity.CopyFrom(identity_proto)
-                event.timestamp.FromDatetime(datetime.now(UTC))
-                yield event
-                sequence += 1
-                await _apply_terminal_event(run, draft, runs, threads)
-        except Exception as exc:
-            await _fail_if_not_done(run, exc, runs)
-            raise
-
-    await stub.StreamEvents(events(), timeout=None)
-    await _mark_idle_if_needed(run, runs, threads)
-
-
-async def _stream_local(
-    receipt: Any,
-    run: Any,
-    adapter: Any,
-    runs: Any,
-    threads: Any,
-) -> None:
+    sequence = 0
     try:
         async for draft in adapter.stream(receipt.command.request):
+            if event_publisher is not None:
+                await event_publisher.publish(_event_to_proto(run.identity, draft, sequence))
+            sequence += 1
             await _apply_terminal_event(run, draft, runs, threads)
     except Exception as exc:
         await _fail_if_not_done(run, exc, runs)
         raise
     await _mark_idle_if_needed(run, runs, threads)
+
+
+def _event_to_proto(identity: Any, draft: Any, sequence: int) -> Any:
+    from google.protobuf import struct_pb2
+
+    from universal_runtime.adapters.grpc.generated.runtime.v1 import execution_pb2
+    from universal_runtime.adapters.grpc.payloads import python_to_value
+
+    event = execution_pb2.RuntimeEvent(
+        type=str(draft.type),
+        sequence=sequence,
+        namespace=list(draft.namespace),
+        data=python_to_value(draft.data),
+        native=struct_pb2.Struct(
+            fields={key: python_to_value(value) for key, value in draft.native.items()}
+        ),
+    )
+    event.identity.CopyFrom(_identity_to_proto(identity))
+    event.timestamp.FromDatetime(datetime.now(UTC))
+    return event
 
 
 async def _apply_terminal_event(run: Any, draft: Any, runs: Any, threads: Any) -> None:
