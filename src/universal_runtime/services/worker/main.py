@@ -9,7 +9,10 @@ from collections.abc import Callable
 from typing import Any
 
 from universal_runtime.adapters.grpc import WorkerServer
-from universal_runtime.adapters.kafka import AioKafkaRunCommandQueue
+from universal_runtime.adapters.kafka import (
+    AioKafkaRunCommandQueue,
+    AioKafkaRuntimeEventPublisher,
+)
 from universal_runtime.adapters.langgraph import LangGraphAdapter
 from universal_runtime.adapters.langgraph.persistence import postgres_persistence
 from universal_runtime.adapters.postgres.database import create_engine, create_session_factory
@@ -87,19 +90,27 @@ async def _serve(config: LauncherConfig) -> None:
     threads = PostgresThreadRepository(session_factory)
     application_id = os.environ.get("UR_APPLICATION_ID", "default")
     environment = os.environ.get("UR_KAFKA_ENVIRONMENT", "local")
+    prefix = os.environ.get("UR_TOPIC_PREFIX", "rt")
 
     queue: AioKafkaRunCommandQueue | None = None
+    event_publisher: AioKafkaRuntimeEventPublisher | None = None
     kafka_servers = os.environ.get("UR_KAFKA_BOOTSTRAP_SERVERS")
     if kafka_servers:
         queue = AioKafkaRunCommandQueue(
             bootstrap_servers=kafka_servers,
-            prefix=os.environ.get("UR_TOPIC_PREFIX", "rt"),
+            prefix=prefix,
             environment=environment,
             application_id=application_id,
             group_id=os.environ.get(
                 "UR_WORKER_CONSUMER_GROUP",
                 f"rt.{environment}.{application_id}.workers.v1",
             ),
+        )
+        event_publisher = AioKafkaRuntimeEventPublisher(
+            bootstrap_servers=kafka_servers,
+            prefix=prefix,
+            environment=environment,
+            application_id=application_id,
         )
 
     server = create_server(
@@ -112,41 +123,29 @@ async def _serve(config: LauncherConfig) -> None:
     async def execution_loop() -> None:
         if queue is None:
             return
-
-        gateway_target = os.environ.get("UR_GATEWAY_GRPC_TARGET")
-        gateway_channel = None
-        if gateway_target:
-            import grpc
-
-            gateway_channel = grpc.aio.insecure_channel(gateway_target)
-
-        try:
-            while not stop.is_set():
-                try:
-                    receipt = await queue.receive(_worker_id())
-                    await server.worker.acquire()
-                    task = asyncio.create_task(
-                        process_receipt(
-                            receipt,
-                            server.worker,
-                            gateway_channel,
-                            queue,
-                            adapters,
-                            runs,
-                            threads,
-                        )
+        while not stop.is_set():
+            try:
+                receipt = await queue.receive(_worker_id())
+                await server.worker.acquire()
+                task = asyncio.create_task(
+                    process_receipt(
+                        receipt,
+                        server.worker,
+                        event_publisher,
+                        queue,
+                        adapters,
+                        runs,
+                        threads,
                     )
-                    active_tasks.add(task)
-                    task.add_done_callback(active_tasks.discard)
-                except asyncio.CancelledError:
+                )
+                active_tasks.add(task)
+                task.add_done_callback(active_tasks.discard)
+            except asyncio.CancelledError:
+                break
+            except RuntimeFailure as exc:
+                if exc.code is ErrorCode.QUEUE_CLOSED:
                     break
-                except RuntimeFailure as exc:
-                    if exc.code is ErrorCode.QUEUE_CLOSED:
-                        break
-                    _LOGGER.exception("worker queue receive failed")
-        finally:
-            if gateway_channel is not None:
-                await gateway_channel.close()
+                _LOGGER.exception("worker queue receive failed")
 
     loop = asyncio.get_running_loop()
     loop.add_signal_handler(signal.SIGTERM, stop.set)
@@ -176,6 +175,8 @@ async def _serve(config: LauncherConfig) -> None:
         await context.__aexit__(None, None, None)
         if queue is not None:
             await queue.close()
+        if event_publisher is not None:
+            await event_publisher.close()
         await engine.dispose()
 
 
