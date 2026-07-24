@@ -8,3 +8,4 @@ spec:
     app: gateway
   ports:
     - {name: http, port: 8080, targetPort: http}
+    - {name: control-grpc, port: 9092, targetPort: control-grpc}
