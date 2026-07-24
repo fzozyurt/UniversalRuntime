@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from universal_runtime.adapters.memory.capacity import ExecutionCapacity
 from universal_runtime.adapters.memory.configuration import InMemoryApplicationConfigRepository
@@ -18,13 +19,20 @@ from universal_runtime.application.runtime_service import RuntimeExecutionServic
 
 @dataclass(slots=True)
 class LocalRuntime:
-    config: InMemoryApplicationConfigRepository
-    assistants: InMemoryAssistantRepository
-    outbox: InMemoryOutboxRepository
-    threads: InMemoryThreadRepository
-    runs: InMemoryRunRepository
-    events: InMemoryEventJournal
-    commands: InMemoryPriorityQueue
+    """Runtime composition shared by local and production profiles.
+
+    ``events`` is optional because framework-managed persistence (for example
+    LangGraph checkpoint/store) is authoritative in production. Local mode keeps
+    the in-memory journal solely to provide deterministic development replay.
+    """
+
+    config: Any
+    assistants: Any
+    outbox: Any | None
+    threads: Any
+    runs: Any
+    events: Any | None
+    commands: Any
     adapters: InMemoryAdapterRegistry
     capacity: ExecutionCapacity
     execution: RuntimeExecutionService
