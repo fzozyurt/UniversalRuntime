@@ -1,0 +1,1 @@
+"""Gateway health routes."""
