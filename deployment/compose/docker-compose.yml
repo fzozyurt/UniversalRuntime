@@ -48,15 +48,16 @@ services:
     environment:
       UR_TOPIC_PREFIX: ${UR_TOPIC_PREFIX:-rt}
       UR_KAFKA_ENVIRONMENT: ${UR_KAFKA_ENVIRONMENT:-local}
+      UR_APPLICATION_ID: ${UR_APPLICATION_ID:-phase1_agent}
     depends_on:
       kafka:
         condition: service_healthy
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - |
-        root="$${UR_TOPIC_PREFIX}.$${UR_KAFKA_ENVIRONMENT}"
-        for suffix in runs.interactive runs.normal runs.batch execution.events run.lifecycle run.commands deadletter; do
-          kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic "$${root}.$${suffix}.v1" --partitions 3 --replication-factor 1
+        root="$${UR_TOPIC_PREFIX}.$${UR_KAFKA_ENVIRONMENT}.$${UR_APPLICATION_ID}"
+        for suffix in runs.short_queue.v1 runs.long_queue.v1 execution.events.v1 run.lifecycle.v1 run.commands.v1 audit.events.v1 deadletter.v1; do
+          kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic "$${root}.$${suffix}" --partitions 3 --replication-factor 1
         done
     restart: "no"
 
@@ -69,7 +70,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    command: ["--config", "/opt/universal-runtime/runtime.yaml", "--application-id", "platform", "--environment", "local"]
+    command: ["--application-id", "platform", "--environment", "${UR_KAFKA_ENVIRONMENT:-local}"]
     restart: "no"
 
   gateway-1: &gateway
@@ -85,20 +86,23 @@ services:
       UR_INSTANCE_ID: gateway-1
       UR_GATEWAY_HOST: 0.0.0.0
       UR_GATEWAY_PORT: 8080
+      UR_GATEWAY_GRPC_PORT: 9091
+      UR_GATEWAY_CONTROL_GRPC_PORT: 9092
       UR_DATABASE_URL: postgresql+psycopg://runtime:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/runtime
       UR_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       UR_TOPIC_PREFIX: ${UR_TOPIC_PREFIX:-rt}
       UR_KAFKA_ENVIRONMENT: ${UR_KAFKA_ENVIRONMENT:-local}
       UR_CONTRACT_SCHEMA_PATH: /opt/universal-runtime/contracts/config/runtime-application.schema.json
-      UR_APPLICATION_ID: phase1_agent
-      UR_APPLICATION_ENTRYPOINTS: phase1_agent.graph:build_graph,phase1_agent.deep_agent:build_deep_agent
-      UR_APPLICATION_NAME: phase1-agent
+      UR_WORKSPACE_KEY: ${UR_WORKSPACE_KEY:-default}
+      UR_APPLICATION_ID: ${UR_APPLICATION_ID:-phase1_agent}
+      UR_APPLICATION_NAME: ${UR_APPLICATION_NAME:-phase1-agent}
+      UR_DEPLOYMENT_ID: ${UR_DEPLOYMENT_ID:-phase1-agent-local}
       PYTHONPATH: /opt/universal-runtime:/opt/universal-runtime/applications/phase1-agent
     depends_on:
-      postgres:
-        condition: service_healthy
-      kafka:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "/usr/local/bin/runtime-healthcheck.py"]
       interval: 5s
@@ -110,80 +114,6 @@ services:
     environment:
       <<: *runtime-env
       UR_INSTANCE_ID: gateway-2
-
-  all: &all
-    <<: *gateway
-    profiles: ["compact"]
-    ports:
-      - "${UR_PUBLIC_PORT:-8080}:8080"
-    environment:
-      <<: *runtime-env
-      UR_MODE: all
-      UR_INSTANCE_ID: all-1
-      UR_WORKER_TARGETS: 127.0.0.1:9090
-      UR_GATEWAY_REGISTER_URL: http://127.0.0.1:8080/internal/workers/register
-      UR_WORKER_ADVERTISE_TARGET: 127.0.0.1:9090
-
-  dispatcher-1: &dispatcher
-    image: universal-runtime:local
-    pull_policy: never
-    environment:
-      <<: *runtime-env
-      UR_MODE: dispatcher
-      UR_INSTANCE_ID: dispatcher-1
-      UR_WORKER_TARGETS: worker-1:9090,worker-2:9090
-    depends_on:
-      postgres:
-        condition: service_healthy
-      kafka:
-        condition: service_healthy
-
-  dispatcher-2:
-    <<: *dispatcher
-    environment:
-      <<: *runtime-env
-      UR_MODE: dispatcher
-      UR_INSTANCE_ID: dispatcher-2
-      UR_WORKER_TARGETS: worker-1:9090,worker-2:9090
-
-  worker-1: &worker
-    image: universal-runtime:local
-    pull_policy: never
-    environment:
-      <<: *runtime-env
-      UR_MODE: worker
-      UR_INSTANCE_ID: worker-1
-      UR_GRPC_HOST: 0.0.0.0
-      UR_GRPC_PORT: 9090
-      UR_WORKER_MAX_CONCURRENCY: ${UR_WORKER_MAX_CONCURRENCY:-8}
-      UR_GATEWAY_REGISTER_URL: http://gateway-1:8080/internal/workers/register
-      UR_WORKER_ADVERTISE_TARGET: worker-1:9090
-    depends_on:
-      postgres:
-        condition: service_healthy
-      kafka:
-        condition: service_healthy
-
-  worker-2:
-    <<: *worker
-    environment:
-      <<: *runtime-env
-      UR_MODE: worker
-      UR_INSTANCE_ID: worker-2
-      UR_WORKER_ADVERTISE_TARGET: worker-2:9090
-
-  projector:
-    image: universal-runtime:local
-    pull_policy: never
-    environment:
-      <<: *runtime-env
-      UR_MODE: projector
-      UR_INSTANCE_ID: projector-1
-    depends_on:
-      postgres:
-        condition: service_healthy
-      kafka:
-        condition: service_healthy
 
   haproxy:
     image: haproxy:3.0
@@ -197,6 +127,60 @@ services:
         condition: service_healthy
       gateway-2:
         condition: service_healthy
+
+  worker-1: &worker
+    image: universal-runtime:local
+    pull_policy: never
+    environment:
+      <<: *runtime-env
+      UR_MODE: worker
+      UR_INSTANCE_ID: worker-1
+      UR_GRPC_HOST: 0.0.0.0
+      UR_GRPC_PORT: 9090
+      UR_WORKER_MAX_CONCURRENCY: ${UR_WORKER_MAX_CONCURRENCY:-8}
+      UR_GATEWAY_CONTROL_GRPC_TARGET: haproxy:9092
+      UR_WORKER_ADVERTISE_TARGET: worker-1:9090
+      UR_APPLICATION_ENTRYPOINTS: ${UR_APPLICATION_ENTRYPOINTS:-phase1_agent.graph:build_graph,phase1_agent.deep_agent:build_deep_agent}
+      UR_APPLICATION_MIGRATIONS_PATH: ${UR_APPLICATION_MIGRATIONS_PATH:-}
+      UR_APPLICATION_MIGRATION_REVISION: ${UR_APPLICATION_MIGRATION_REVISION:-head}
+      ARTIFACT_VERSION: ${ARTIFACT_VERSION:-development}
+    depends_on:
+      haproxy:
+        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
+
+  worker-2:
+    <<: *worker
+    environment:
+      <<: *runtime-env
+      UR_MODE: worker
+      UR_INSTANCE_ID: worker-2
+      UR_GRPC_HOST: 0.0.0.0
+      UR_GRPC_PORT: 9090
+      UR_WORKER_MAX_CONCURRENCY: ${UR_WORKER_MAX_CONCURRENCY:-8}
+      UR_GATEWAY_CONTROL_GRPC_TARGET: haproxy:9092
+      UR_WORKER_ADVERTISE_TARGET: worker-2:9090
+      UR_APPLICATION_ENTRYPOINTS: ${UR_APPLICATION_ENTRYPOINTS:-phase1_agent.graph:build_graph,phase1_agent.deep_agent:build_deep_agent}
+      UR_APPLICATION_MIGRATIONS_PATH: ${UR_APPLICATION_MIGRATIONS_PATH:-}
+      UR_APPLICATION_MIGRATION_REVISION: ${UR_APPLICATION_MIGRATION_REVISION:-head}
+      ARTIFACT_VERSION: ${ARTIFACT_VERSION:-development}
+
+  all:
+    <<: *gateway
+    profiles: ["compact"]
+    ports:
+      - "${UR_PUBLIC_PORT:-8080}:8080"
+    environment:
+      <<: *runtime-env
+      UR_MODE: all
+      UR_INSTANCE_ID: all-1
+      UR_GATEWAY_CONTROL_GRPC_TARGET: 127.0.0.1:9092
+      UR_WORKER_ADVERTISE_TARGET: 127.0.0.1:9090
+      UR_APPLICATION_ENTRYPOINTS: ${UR_APPLICATION_ENTRYPOINTS:-phase1_agent.graph:build_graph,phase1_agent.deep_agent:build_deep_agent}
+      UR_APPLICATION_MIGRATIONS_PATH: ${UR_APPLICATION_MIGRATIONS_PATH:-}
+      UR_APPLICATION_MIGRATION_REVISION: ${UR_APPLICATION_MIGRATION_REVISION:-head}
+      ARTIFACT_VERSION: ${ARTIFACT_VERSION:-development}
 
 volumes:
   postgres-data:
