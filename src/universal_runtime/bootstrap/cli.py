@@ -44,7 +44,6 @@ def _parser() -> argparse.ArgumentParser:
     api.add_argument("--port", type=int, default=8000)
     commands.add_parser("worker", help="start the runtime worker composition")
     commands.add_parser("gateway", help="start the Gateway HTTP and gRPC control processes")
-    commands.add_parser("projector", help="start the event projector process")
     commands.add_parser("all", help="start Gateway and Worker in one process")
     validate = commands.add_parser("validate-config", help="validate a runtime YAML file")
     validate.add_argument("path", type=Path)
@@ -125,14 +124,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             port=args.port,
         )
         return 0
-    if args.command in {"all", "gateway", "projector", "worker"}:
+    if args.command in {"all", "gateway", "worker"}:
         service_main: Any
         if args.command == "all":
             from universal_runtime.services.all.main import main as service_main
         elif args.command == "gateway":
             from universal_runtime.services.gateway.main import main as service_main
-        elif args.command == "projector":
-            from universal_runtime.services.event_projector.main import main as service_main
         else:
             from universal_runtime.services.worker.main import main as service_main
         return cast(int, service_main(run_forever=True))
