@@ -51,8 +51,18 @@ class ApplicationMigrationCoordinator:
         target_revision: str,
         worker_id: str,
     ) -> MigrationClaim:
+        parameters = {
+            "id": str(CommandId.new()),
+            "application_id": application_id,
+            "workspace_key": workspace_key,
+            "environment": environment,
+            "app_version": app_version,
+            "target_revision": target_revision,
+            "worker_id": worker_id,
+            "claim_timeout_seconds": self._claim_timeout_seconds,
+        }
         async with self._engine.begin() as connection:
-            result = await connection.execute(
+            inserted = await connection.execute(
                 text(
                     """
                     INSERT INTO rt_core.application_migrations (
@@ -65,104 +75,84 @@ class ApplicationMigrationCoordinator:
                         1, NOW(), NOW()
                     )
                     ON CONFLICT (application_id, workspace_key, environment, app_version)
-                    DO UPDATE SET
-                        worker_id = CASE
-                            WHEN rt_core.application_migrations.status IN ('fail', 'pending')
-                              OR (
-                                  rt_core.application_migrations.status = 'migrating'
-                                  AND rt_core.application_migrations.updated_at
-                                      < NOW() - make_interval(secs => :claim_timeout_seconds)
-                              )
-                            THEN EXCLUDED.worker_id
-                            ELSE rt_core.application_migrations.worker_id
-                        END,
-                        target_revision = CASE
-                            WHEN rt_core.application_migrations.status IN ('fail', 'pending')
-                              OR (
-                                  rt_core.application_migrations.status = 'migrating'
-                                  AND rt_core.application_migrations.updated_at
-                                      < NOW() - make_interval(secs => :claim_timeout_seconds)
-                              )
-                            THEN EXCLUDED.target_revision
-                            ELSE rt_core.application_migrations.target_revision
-                        END,
-                        status = CASE
-                            WHEN rt_core.application_migrations.status IN ('fail', 'pending')
-                              OR (
-                                  rt_core.application_migrations.status = 'migrating'
-                                  AND rt_core.application_migrations.updated_at
-                                      < NOW() - make_interval(secs => :claim_timeout_seconds)
-                              )
-                            THEN 'migrating'
-                            ELSE rt_core.application_migrations.status
-                        END,
-                        attempt_number = CASE
-                            WHEN rt_core.application_migrations.status IN ('fail', 'pending')
-                              OR (
-                                  rt_core.application_migrations.status = 'migrating'
-                                  AND rt_core.application_migrations.updated_at
-                                      < NOW() - make_interval(secs => :claim_timeout_seconds)
-                              )
-                            THEN rt_core.application_migrations.attempt_number + 1
-                            ELSE rt_core.application_migrations.attempt_number
-                        END,
-                        error = CASE
-                            WHEN rt_core.application_migrations.status IN ('fail', 'pending')
-                              OR (
-                                  rt_core.application_migrations.status = 'migrating'
-                                  AND rt_core.application_migrations.updated_at
-                                      < NOW() - make_interval(secs => :claim_timeout_seconds)
-                              )
-                            THEN NULL
-                            ELSE rt_core.application_migrations.error
-                        END,
-                        updated_at = CASE
-                            WHEN rt_core.application_migrations.status IN ('fail', 'pending')
-                              OR (
-                                  rt_core.application_migrations.status = 'migrating'
-                                  AND rt_core.application_migrations.updated_at
-                                      < NOW() - make_interval(secs => :claim_timeout_seconds)
-                              )
-                            THEN NOW()
-                            ELSE rt_core.application_migrations.updated_at
-                        END
+                    DO NOTHING
                     RETURNING status, worker_id, target_revision, error
                     """
                 ),
-                {
-                    "id": str(CommandId.new()),
-                    "application_id": application_id,
-                    "workspace_key": workspace_key,
-                    "environment": environment,
-                    "app_version": app_version,
-                    "target_revision": target_revision,
-                    "worker_id": worker_id,
-                    "claim_timeout_seconds": self._claim_timeout_seconds,
-                },
+                parameters,
             )
-            row = result.mappings().one()
+            inserted_row = inserted.mappings().one_or_none()
+            if inserted_row is not None:
+                return MigrationClaim(
+                    decision="migrate",
+                    application_id=application_id,
+                    workspace_key=workspace_key,
+                    environment=environment,
+                    app_version=app_version,
+                    target_revision=target_revision,
+                    worker_id=worker_id,
+                )
 
-        existing_revision = str(row["target_revision"] or "head")
-        if existing_revision != target_revision:
-            raise RuntimeFailure(
-                ErrorCode.APPLICATION_MIGRATION_FAILED,
-                "application artifact version has conflicting migration revisions",
-                details={
-                    "application_id": application_id,
-                    "app_version": app_version,
-                    "expected_revision": existing_revision,
-                    "requested_revision": target_revision,
-                },
+            selected = await connection.execute(
+                text(
+                    """
+                    SELECT status, worker_id, target_revision, error,
+                           updated_at < NOW() - make_interval(secs => :claim_timeout_seconds)
+                               AS stale
+                    FROM rt_core.application_migrations
+                    WHERE application_id = :application_id
+                      AND workspace_key = :workspace_key
+                      AND environment = :environment
+                      AND app_version = :app_version
+                    FOR UPDATE
+                    """
+                ),
+                parameters,
             )
+            row = selected.mappings().one()
+            existing_revision = str(row["target_revision"] or "head")
+            if existing_revision != target_revision:
+                raise RuntimeFailure(
+                    ErrorCode.APPLICATION_MIGRATION_FAILED,
+                    "application artifact version has conflicting migration revisions",
+                    details={
+                        "application_id": application_id,
+                        "app_version": app_version,
+                        "expected_revision": existing_revision,
+                        "requested_revision": target_revision,
+                    },
+                )
 
-        status = str(row["status"])
-        owner = str(row["worker_id"]) if row["worker_id"] is not None else None
-        if status == "success":
-            decision: MigrationDecision = "skip"
-        elif status == "migrating" and owner == worker_id:
-            decision = "migrate"
-        else:
-            decision = "wait"
+            status = str(row["status"])
+            owner = str(row["worker_id"]) if row["worker_id"] is not None else None
+            if status == "success":
+                decision: MigrationDecision = "skip"
+            elif status in {"fail", "pending"} or bool(row["stale"]):
+                await connection.execute(
+                    text(
+                        """
+                        UPDATE rt_core.application_migrations
+                        SET worker_id = :worker_id,
+                            target_revision = :target_revision,
+                            status = 'migrating',
+                            attempt_number = attempt_number + 1,
+                            error = NULL,
+                            updated_at = NOW()
+                        WHERE application_id = :application_id
+                          AND workspace_key = :workspace_key
+                          AND environment = :environment
+                          AND app_version = :app_version
+                        """
+                    ),
+                    parameters,
+                )
+                owner = worker_id
+                decision = "migrate"
+            else:
+                # This includes an RPC retry from the current owner. The retry
+                # waits for the original migration instead of executing it twice.
+                decision = "wait"
+
         return MigrationClaim(
             decision=decision,
             application_id=application_id,
