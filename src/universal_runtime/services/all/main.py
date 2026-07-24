@@ -4,12 +4,14 @@ import asyncio
 import importlib
 import os
 import signal
-from typing import Any
 
 import uvicorn
 
 from universal_runtime.adapters.grpc import WorkerServer
-from universal_runtime.adapters.kafka import AioKafkaRunCommandQueue
+from universal_runtime.adapters.kafka import (
+    AioKafkaRunCommandQueue,
+    AioKafkaRuntimeEventPublisher,
+)
 from universal_runtime.adapters.langgraph import LangGraphAdapter
 from universal_runtime.adapters.langgraph.persistence import postgres_persistence
 from universal_runtime.adapters.postgres.database import create_engine, create_session_factory
@@ -33,10 +35,6 @@ async def _serve(config: LauncherConfig) -> None:
     from universal_runtime.telemetry import init_observability
 
     init_observability()
-    os.environ.setdefault(
-        "UR_GATEWAY_GRPC_TARGET",
-        f"127.0.0.1:{os.environ.get('UR_GATEWAY_GRPC_PORT', '9091')}",
-    )
     os.environ.setdefault(
         "UR_GATEWAY_CONTROL_GRPC_TARGET",
         f"127.0.0.1:{os.environ.get('UR_GATEWAY_CONTROL_GRPC_PORT', '9092')}",
@@ -86,17 +84,28 @@ async def _serve(config: LauncherConfig) -> None:
     threads = PostgresThreadRepository(sessions)
     application_id = os.environ.get("UR_APPLICATION_ID", "default")
     environment = os.environ.get("UR_KAFKA_ENVIRONMENT", "local")
+    prefix = os.environ.get("UR_TOPIC_PREFIX", "rt")
     kafka_servers = os.environ.get("UR_KAFKA_BOOTSTRAP_SERVERS")
     queue = (
         AioKafkaRunCommandQueue(
             bootstrap_servers=kafka_servers,
-            prefix=os.environ.get("UR_TOPIC_PREFIX", "rt"),
+            prefix=prefix,
             environment=environment,
             application_id=application_id,
             group_id=os.environ.get(
                 "UR_WORKER_CONSUMER_GROUP",
                 f"rt.{environment}.{application_id}.workers.v1",
             ),
+        )
+        if kafka_servers
+        else None
+    )
+    event_publisher = (
+        AioKafkaRuntimeEventPublisher(
+            bootstrap_servers=kafka_servers,
+            prefix=prefix,
+            environment=environment,
+            application_id=application_id,
         )
         if kafka_servers
         else None
@@ -114,36 +123,30 @@ async def _serve(config: LauncherConfig) -> None:
     async def execution_loop() -> None:
         if queue is None:
             return
-        import grpc
-
-        channel = grpc.aio.insecure_channel(os.environ["UR_GATEWAY_GRPC_TARGET"])
-        try:
-            while not stop.is_set():
-                try:
-                    receipt = await queue.receive(
-                        WorkerId.parse(os.environ.get("UR_INSTANCE_ID", "all"))
+        while not stop.is_set():
+            try:
+                receipt = await queue.receive(
+                    WorkerId.parse(os.environ.get("UR_INSTANCE_ID", "all"))
+                )
+                await worker.worker.acquire()
+                task = asyncio.create_task(
+                    process_receipt(
+                        receipt,
+                        worker.worker,
+                        event_publisher,
+                        queue,
+                        adapters,
+                        runs,
+                        threads,
                     )
-                    await worker.worker.acquire()
-                    task = asyncio.create_task(
-                        process_receipt(
-                            receipt,
-                            worker.worker,
-                            channel,
-                            queue,
-                            adapters,
-                            runs,
-                            threads,
-                        )
-                    )
-                    active_tasks.add(task)
-                    task.add_done_callback(active_tasks.discard)
-                except asyncio.CancelledError:
+                )
+                active_tasks.add(task)
+                task.add_done_callback(active_tasks.discard)
+            except asyncio.CancelledError:
+                break
+            except RuntimeFailure as exc:
+                if exc.code is ErrorCode.QUEUE_CLOSED:
                     break
-                except RuntimeFailure as exc:
-                    if exc.code is ErrorCode.QUEUE_CLOSED:
-                        break
-        finally:
-            await channel.close()
 
     loop = asyncio.get_running_loop()
     loop.add_signal_handler(signal.SIGTERM, stop.set)
@@ -174,6 +177,8 @@ async def _serve(config: LauncherConfig) -> None:
         await http_task
         if queue is not None:
             await queue.close()
+        if event_publisher is not None:
+            await event_publisher.close()
         await context.__aexit__(None, None, None)
         await engine.dispose()
 
