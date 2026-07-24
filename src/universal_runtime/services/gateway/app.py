@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from typing import Any
-
 from fastapi import FastAPI
 
 from universal_runtime.adapters.fastapi.router_registry import (
     RouterContext,
     finalize_route_metadata,
     register_router_package,
+    validate_openapi_contract,
 )
 from universal_runtime.bootstrap.local import LocalRuntime
 from universal_runtime.domain.assistants import Assistant
@@ -57,6 +56,7 @@ def create_app(
     )
     finalize_route_metadata(app)
     app.openapi_schema = None
+    validate_openapi_contract(app)
     return app
 
 
