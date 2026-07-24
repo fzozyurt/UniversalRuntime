@@ -6,6 +6,7 @@ from typing import Any
 
 from alembic import command
 from alembic.config import Config
+from sqlalchemy import text
 
 from universal_runtime.adapters.postgres.locks import advisory_migration_lock
 from universal_runtime.adapters.postgres.schema import DEFAULT_SCHEMAS
@@ -18,8 +19,8 @@ _RUNTIME_ALEMBIC = Path(__file__).with_name("alembic")
 class ApplicationMigrationBundle:
     """Application-owned revisions executed by the Runtime Alembic environment.
 
-    Applications only ship revision files. Runtime owns env.py, script.py.mako,
-    connection selection, schema targeting and advisory locking.
+    Applications ship only revision files. Runtime owns env.py, script.py.mako,
+    connection selection, schema targeting, version-table placement and locking.
     """
 
     versions_path: Path
@@ -65,14 +66,19 @@ class AlembicApplicationMigrationRunner:
         config.attributes["target_metadata"] = bundle.target_metadata
 
         try:
+            # The advisory lock and Alembic upgrade must use the same database
+            # connection. A transaction-scoped lock on one connection cannot
+            # protect migration work performed on another pooled connection.
             async with advisory_migration_lock(
                 self.engine, application_id, environment, "application"
-            ):
-                async with self.engine.begin() as connection:
-                    config.attributes["connection"] = connection.sync_connection
-                    await connection.run_sync(
-                        lambda _connection: command.upgrade(config, revision)
-                    )
+            ) as connection:
+                await connection.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema}"'))
+
+                def _upgrade(sync_connection: Any) -> None:
+                    config.attributes["connection"] = sync_connection
+                    command.upgrade(config, revision)
+
+                await connection.run_sync(_upgrade)
         except RuntimeFailure:
             raise
         except Exception as exc:
