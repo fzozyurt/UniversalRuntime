@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import uvicorn
+from fastapi import FastAPI
 
 from universal_runtime.bootstrap.runtime_config import LauncherConfig
 from universal_runtime.services.gateway.app import create_app
+from universal_runtime.services.gateway.event_fanout import attach_runtime_event_fanout
 from universal_runtime.services.gateway.worker_control import attach_worker_control
 
 
-def create_gateway_app() -> object:
-    return attach_worker_control(create_app())
+def create_gateway_app() -> FastAPI:
+    app = create_app()
+    attach_worker_control(app)
+    attach_runtime_event_fanout(app)
+    return app
 
 
 def main(*, run_forever: bool = True) -> int:
