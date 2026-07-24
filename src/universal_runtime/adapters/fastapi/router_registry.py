@@ -55,8 +55,41 @@ def register_router_package(
         router = builder(effective_context, tag)
         if not isinstance(router, APIRouter):
             raise TypeError(f"build_router() must return APIRouter: {module.__name__}")
-        prefix = folder_prefix(module.__name__, package_name) if module.AUTO_PREFIX else ""
+        auto_prefix = bool(getattr(module, "AUTO_PREFIX", False))
+        prefix = folder_prefix(module.__name__, package_name) if auto_prefix else ""
         app.include_router(router, prefix=prefix)
+
+
+def finalize_route_metadata(app: FastAPI) -> None:
+    """Apply stable names/tags and a minimal example to every remaining route."""
+
+    seen: set[str] = set()
+    for route in app.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        identifier = route.operation_id or operation_id(route)
+        if identifier in seen:
+            methods = "_".join(sorted(method.lower() for method in route.methods or {"get"}))
+            identifier = f"{identifier}_{methods}"
+        seen.add(identifier)
+        route.operation_id = identifier
+        if not route.tags:
+            route.tags = [_tag_from_path(route.path)]
+        route.summary = route.summary or _title(route.name)
+        route.description = route.description or _description(identifier)
+        if route.body_field is not None:
+            extra = dict(route.openapi_extra or {})
+            request_body = dict(extra.get("requestBody", {}))
+            content = dict(request_body.get("content", {}))
+            media = dict(content.get("application/json", {}))
+            media.setdefault(
+                "examples",
+                {"default": {"summary": "Request example", "value": {}}},
+            )
+            content["application/json"] = media
+            request_body["content"] = content
+            extra["requestBody"] = request_body
+            route.openapi_extra = extra
 
 
 def extract_routes(
@@ -164,6 +197,11 @@ def _title(value: str) -> str:
 
 def _slug(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+
+
+def _tag_from_path(path: str) -> str:
+    first = next((part for part in path.split("/") if part and not part.startswith("{")), "General")
+    return _title(first)
 
 
 def _description(operation: str) -> str:
