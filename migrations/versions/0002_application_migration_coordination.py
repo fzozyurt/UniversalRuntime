@@ -5,8 +5,8 @@ Revises: 0001_platform_execution
 Create Date: 2026-07-24
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0002_application_migration_coordination"
 down_revision = "0001_platform_execution"
