@@ -4,11 +4,11 @@ namespace: universal-runtime
 resources:
   - namespace.yaml
   - configmap.yaml
+  - application-api-deployment.yaml
+  - application-api-service.yaml
   - gateway-deployment.yaml
   - gateway-service.yaml
-  - dispatcher-deployment.yaml
   - worker-deployment.yaml
-  - projector-deployment.yaml
   - migration-job.yaml
   - haproxy-deployment.yaml
   - haproxy-service.yaml

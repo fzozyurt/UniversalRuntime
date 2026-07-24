@@ -267,13 +267,30 @@ class RunLifecycleEventRow(AuditMixin, PlatformBase):
 
 class WorkerRow(AuditMixin, PlatformBase):
     __tablename__ = "workers"
-    __table_args__ = ({"schema": DEFAULT_SCHEMAS.execution},)
+    __table_args__ = (
+        Index("ix_rt_exec_workers_application_status", "application_id", "status"),
+        {"schema": DEFAULT_SCHEMAS.execution},
+    )
 
     id: Mapped[str] = mapped_column(String(255), primary_key=True)
     worker_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    workspace_key: Mapped[str] = mapped_column(
+        String(255), nullable=False, server_default="default"
+    )
+    application_id: Mapped[str] = mapped_column(
+        String(255), nullable=False, server_default="default"
+    )
+    revision_id: Mapped[str] = mapped_column(String(255), nullable=False, server_default="unknown")
     deployment_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    target: Mapped[str] = mapped_column(String(512), nullable=False, server_default="")
+    pod_name: Mapped[str] = mapped_column(String(255), nullable=False, server_default="")
+    app_version: Mapped[str] = mapped_column(String(255), nullable=False, server_default="unknown")
+    run_topic: Mapped[str] = mapped_column(String(512), nullable=False, server_default="")
+    max_concurrency: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    config_hash: Mapped[str] = mapped_column(String(128), nullable=False, server_default="")
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     capabilities: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class WorkerLeaseRow(AuditMixin, PlatformBase):
@@ -291,7 +308,13 @@ class WorkerLeaseRow(AuditMixin, PlatformBase):
 class ApplicationMigrationRow(AuditMixin, PlatformBase):
     __tablename__ = "application_migrations"
     __table_args__ = (
-        UniqueConstraint("application_id", "workspace_key", "environment"),
+        UniqueConstraint(
+            "application_id",
+            "workspace_key",
+            "environment",
+            "app_version",
+            name="uq_application_migrations_target",
+        ),
         {"schema": DEFAULT_SCHEMAS.core},
     )
 
@@ -300,6 +323,9 @@ class ApplicationMigrationRow(AuditMixin, PlatformBase):
     workspace_key: Mapped[str] = mapped_column(String(255), nullable=False)
     environment: Mapped[str] = mapped_column(String(63), nullable=False)
     app_version: Mapped[str] = mapped_column(String(255), nullable=False)
+    target_revision: Mapped[str | None] = mapped_column(String(255))
+    worker_id: Mapped[str | None] = mapped_column(String(255))
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, server_default=text("'pending'")
     )

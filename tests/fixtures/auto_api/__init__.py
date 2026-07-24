@@ -1,0 +1,1 @@
+"""Convention-based FastAPI fixture."""

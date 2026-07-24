@@ -33,7 +33,8 @@ from universal_runtime.domain.identity import (
 )
 from universal_runtime.ports.queue import RunCommandQueue
 
-from .dispatcher import PartitionKey
+from .partitioning import PartitionKey
+from .sasl_config import kafka_sasl_kwargs
 from .topics import TopicNames
 
 
@@ -111,7 +112,7 @@ def _command(payload: bytes) -> RunCommand:
 
 
 class AioKafkaRunCommandQueue(RunCommandQueue):
-    """Durable production command queue backed by Kafka consumer groups."""
+    """Durable worker-owned command topics backed by Kafka consumer groups."""
 
     _MAX_RETRIES = 3
 
@@ -120,11 +121,13 @@ class AioKafkaRunCommandQueue(RunCommandQueue):
         *,
         bootstrap_servers: str,
         prefix: str,
+        environment: str,
         application_id: str,
         group_id: str,
     ) -> None:
         self._bootstrap_servers = bootstrap_servers
         self._prefix = prefix
+        self._environment = environment
         self._application_id = application_id
         self._group_id = group_id
         self._producer: AIOKafkaProducer | None = None
@@ -134,19 +137,34 @@ class AioKafkaRunCommandQueue(RunCommandQueue):
 
     async def _ensure_producer(self) -> None:
         if self._producer is None:
-            self._producer = AIOKafkaProducer(bootstrap_servers=self._bootstrap_servers)
+            self._producer = AIOKafkaProducer(
+                bootstrap_servers=self._bootstrap_servers,
+                enable_idempotence=True,
+                **kafka_sasl_kwargs(),
+            )
             await self._producer.start()
 
     async def _ensure_consumer(self) -> None:
         await self._ensure_producer()
         if self._consumer is None:
             instance = AIOKafkaConsumer(
-                TopicNames.run_topic_for(self._prefix, self._application_id, QueuePriority.INTERACTIVE),
-                TopicNames.run_topic_for(self._prefix, self._application_id, QueuePriority.BATCH),
+                TopicNames.run_topic_for(
+                    self._prefix,
+                    self._application_id,
+                    QueuePriority.INTERACTIVE,
+                    environment=self._environment,
+                ),
+                TopicNames.run_topic_for(
+                    self._prefix,
+                    self._application_id,
+                    QueuePriority.BATCH,
+                    environment=self._environment,
+                ),
                 bootstrap_servers=self._bootstrap_servers,
                 group_id=self._group_id,
                 enable_auto_commit=False,
                 auto_offset_reset="earliest",
+                **kafka_sasl_kwargs(),
             )
             try:
                 await instance.start()
@@ -162,8 +180,9 @@ class AioKafkaRunCommandQueue(RunCommandQueue):
             self._prefix,
             str(command.identity.application_id),
             int(command.priority),
+            environment=self._environment,
         )
-        await self._producer.send(
+        await self._producer.send_and_wait(
             topic,
             _json_command(command),
             key=PartitionKey.for_command(command).encode(),
@@ -188,7 +207,11 @@ class AioKafkaRunCommandQueue(RunCommandQueue):
                 except (ValueError, UnicodeDecodeError):
                     pass
         receipt = RunCommandReceipt(
-            command, LeaseId.new(), delivery_count, now, now + timedelta(seconds=self._lease_seconds)
+            command,
+            LeaseId.new(),
+            delivery_count,
+            now,
+            now + timedelta(seconds=self._lease_seconds),
         )
         self._leases[str(receipt.lease_id)] = message
         return receipt
@@ -205,21 +228,32 @@ class AioKafkaRunCommandQueue(RunCommandQueue):
         message = self._leases.pop(str(receipt.lease_id), None)
         if message is None or self._consumer is None:
             raise RuntimeFailure(ErrorCode.INVALID_EXECUTION_INPUT, "receipt is not active")
-        await self._consumer.commit(
-            {TopicPartition(message.topic, message.partition): message.offset + 1}
-        )
-        if not retryable or receipt.delivery_count >= self._MAX_RETRIES:
-            return
+        await self._ensure_producer()
         assert self._producer is not None
-        await self._producer.send(
-            message.topic,
+
+        if retryable and receipt.delivery_count < self._MAX_RETRIES:
+            target_topic = message.topic
+        else:
+            target_topic = TopicNames.from_config(
+                prefix=self._prefix,
+                environment=self._environment,
+                application_id=str(receipt.command.identity.application_id),
+            ).deadletter
+
+        await self._producer.send_and_wait(
+            target_topic,
             _json_command(receipt.command),
             key=PartitionKey.for_command(receipt.command).encode(),
             headers=[
                 ("runtime-schema-version", b"1"),
                 ("run-id", str(receipt.command.identity.run_id).encode()),
                 ("retry-count", str(receipt.delivery_count).encode()),
+                ("source-topic", message.topic.encode()),
             ],
+        )
+        # Commit only after the retry/dead-letter copy is acknowledged by Kafka.
+        await self._consumer.commit(
+            {TopicPartition(message.topic, message.partition): message.offset + 1}
         )
 
     async def close(self) -> None:

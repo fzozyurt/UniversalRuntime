@@ -22,6 +22,15 @@ spec:
           env:
             - {name: UR_MODE, value: worker}
             - {name: UR_INSTANCE_ID, valueFrom: {fieldRef: {fieldPath: metadata.name}}}
+            - {name: POD_IP, valueFrom: {fieldRef: {fieldPath: status.podIP}}}
+            - {name: UR_GATEWAY_CONTROL_GRPC_TARGET, value: gateway:9092}
+            - {name: UR_WORKER_ADVERTISE_TARGET, value: "$(POD_IP):9090"}
+            - name: UR_APPLICATION_ENTRYPOINTS
+              valueFrom:
+                configMapKeyRef:
+                  name: universal-runtime-config
+                  key: UR_WORKER_APPLICATION_ENTRYPOINTS
+            - {name: UR_APPLICATION_MIGRATIONS_PATH, value: ""}
           ports: [{name: grpc, containerPort: 9090}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           volumeMounts: [{name: tmp, mountPath: /tmp}]

@@ -31,9 +31,13 @@ spec:
               value: gateway
             - name: UR_INSTANCE_ID
               valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - name: UR_APPLICATION_HTTP_TARGET
+              value: http://application-api:8000
           ports:
             - name: http
               containerPort: 8080
+            - name: control-grpc
+              containerPort: 9092
           readinessProbe:
             httpGet: {path: /ready, port: http}
             periodSeconds: 5

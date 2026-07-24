@@ -27,27 +27,29 @@ def create_production_runtime() -> LocalRuntime:
         max_overflow=int(os.environ.get("UR_DB_MAX_OVERFLOW", "20")),
     )
     sessions = create_session_factory(engine)
-    assistants = PostgresAssistantRepository(
-        sessions, os.environ.get("UR_APPLICATION_ID", "default")
-    )
+    application_id = os.environ.get("UR_APPLICATION_ID", "default")
+    environment = os.environ.get("UR_KAFKA_ENVIRONMENT", "local")
+    assistants = PostgresAssistantRepository(sessions, application_id)
     threads = PostgresThreadRepository(sessions)
     runs = PostgresRunRepository(sessions)
     commands = AioKafkaRunCommandQueue(
         bootstrap_servers=os.environ.get("UR_KAFKA_BOOTSTRAP_SERVERS", "kafka:9092"),
         prefix=os.environ.get("UR_TOPIC_PREFIX", "rt"),
-        application_id=os.environ.get("UR_APPLICATION_ID", "default"),
-        group_id=f"{os.environ.get('UR_APPLICATION_ID', 'default')}.gateway",
+        environment=environment,
+        application_id=application_id,
+        # Gateway only produces. The group is retained for the queue port but
+        # worker replicas use their own shared application consumer group.
+        group_id=f"rt.{environment}.{application_id}.gateway.v1",
     )
     capacity = ExecutionCapacity(int(os.environ.get("UR_WORKER_MAX_CONCURRENCY", "8")))
     adapters = InMemoryAdapterRegistry()
     return LocalRuntime(
-        config=PostgresApplicationConfigRepository(
-            sessions, os.environ.get("UR_KAFKA_ENVIRONMENT", "local")
-        ),
+        config=PostgresApplicationConfigRepository(sessions, environment),
         assistants=cast(Any, assistants),
         outbox=None,
         threads=cast(Any, threads),
         runs=cast(Any, runs),
+        events=None,
         commands=commands,
         adapters=adapters,
         capacity=capacity,

@@ -53,12 +53,17 @@ def test_event_schema_accepts_namespace_and_rejects_invalid_type() -> None:
 
 
 def test_topic_prefix_and_individual_overrides_are_deterministic() -> None:
-    topics = TopicNames.from_config(prefix="custom", environment="prod")
-    assert topics.short_queue == "custom.prod.runs.short_queue"
-    assert topics.commands == "custom.prod.run.commands"
+    topics = TopicNames.from_config(
+        prefix="custom",
+        environment="prod",
+        application_id="assistant-api",
+    )
+    assert topics.short_queue == "custom.prod.assistant-api.runs.short_queue.v1"
+    assert topics.commands == "custom.prod.assistant-api.run.commands.v1"
     overridden = TopicNames.from_config(
         prefix="custom",
         environment="prod",
+        application_id="assistant-api",
         overrides={"long_queue": "priority.long_queue"},
     )
     assert overridden.long_queue == "priority.long_queue"

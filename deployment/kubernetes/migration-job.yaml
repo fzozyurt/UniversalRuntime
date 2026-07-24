@@ -12,7 +12,7 @@ spec:
       containers:
         - name: migrate
           image: universal-runtime:0.1.0
-          command: ["universal-runtime", "migrate", "--config", "/opt/universal-runtime/runtime.yaml", "--application-id", "platform", "--environment", "production"]
+          command: ["universal-runtime", "migrate", "--application-id", "platform", "--environment", "production"]
           envFrom:
             - {configMapRef: {name: universal-runtime-config}}
             - {secretRef: {name: universal-runtime-secrets}}
