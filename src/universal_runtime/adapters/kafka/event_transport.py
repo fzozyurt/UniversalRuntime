@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from universal_runtime.adapters.kafka.dispatcher import InMemoryKafkaTransport, KafkaMessage
+from universal_runtime.adapters.kafka.in_memory import InMemoryKafkaTransport, KafkaMessage
 from universal_runtime.adapters.kafka.topics import TopicNames
 from universal_runtime.domain.events import RuntimeEvent
 from universal_runtime.ports.events import RuntimeEventPublisher
