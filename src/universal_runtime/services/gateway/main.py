@@ -4,6 +4,11 @@ import uvicorn
 
 from universal_runtime.bootstrap.runtime_config import LauncherConfig
 from universal_runtime.services.gateway.app import create_app
+from universal_runtime.services.gateway.worker_control import attach_worker_control
+
+
+def create_gateway_app() -> object:
+    return attach_worker_control(create_app())
 
 
 def main(*, run_forever: bool = True) -> int:
@@ -14,7 +19,7 @@ def main(*, run_forever: bool = True) -> int:
 
         init_observability()
         uvicorn.run(
-            create_app(),
+            create_gateway_app(),
             host=config.host,
             port=config.port,
             timeout_keep_alive=75,
@@ -23,7 +28,7 @@ def main(*, run_forever: bool = True) -> int:
     return 0
 
 
-app = create_app()
+app = create_gateway_app()
 
 
 if __name__ == "__main__":
