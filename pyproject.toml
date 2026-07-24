@@ -57,7 +57,6 @@ dev = [
 [project.scripts]
 universal-runtime = "universal_runtime.bootstrap.cli:main"
 universal-runtime-gateway = "universal_runtime.services.gateway.main:main"
-universal-runtime-dispatcher = "universal_runtime.services.dispatcher.main:main"
 universal-runtime-worker = "universal_runtime.services.worker.main:main"
 universal-runtime-projector = "universal_runtime.services.event_projector.main:main"
 
