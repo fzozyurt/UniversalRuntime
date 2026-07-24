@@ -8,7 +8,7 @@ router = APIRouter()
 
 
 @router.get(
-    "/",
+    "",
     response_model=HelloResponse,
     summary="Say hello",
     description="Return a deterministic response from the Phase 1 agent application.",
