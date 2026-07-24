@@ -8,7 +8,7 @@ router = APIRouter()
 
 
 @router.post(
-    "/",
+    "",
     response_model=AssistantRead,
     summary="Create assistant",
     description="Create an assistant in the fixture application.",
