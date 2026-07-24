@@ -1,11 +1,11 @@
 from universal_runtime.adapters.kafka.aiokafka_queue import AioKafkaRunCommandQueue
-from universal_runtime.adapters.kafka.dispatcher import (
+from universal_runtime.adapters.kafka.event_transport import KafkaRuntimeEventPublisher
+from universal_runtime.adapters.kafka.in_memory import (
     InMemoryKafkaTransport,
     KafkaMessage,
     KafkaRunCommandQueue,
-    PartitionKey,
-    WeightedFairDispatcher,
 )
+from universal_runtime.adapters.kafka.partitioning import PartitionKey
 from universal_runtime.adapters.kafka.topics import TopicNames
 
 __all__ = [
@@ -16,7 +16,4 @@ __all__ = [
     "KafkaRuntimeEventPublisher",
     "PartitionKey",
     "TopicNames",
-    "WeightedFairDispatcher",
 ]
-
-from .event_transport import KafkaRuntimeEventPublisher
