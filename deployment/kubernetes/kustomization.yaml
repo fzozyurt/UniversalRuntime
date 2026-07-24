@@ -4,6 +4,8 @@ namespace: universal-runtime
 resources:
   - namespace.yaml
   - configmap.yaml
+  - application-api-deployment.yaml
+  - application-api-service.yaml
   - gateway-deployment.yaml
   - gateway-service.yaml
   - worker-deployment.yaml
