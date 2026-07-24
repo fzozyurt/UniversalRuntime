@@ -53,6 +53,26 @@ dev = [
   "build>=1.2",
   "grpcio-tools>=1.66",
 ]
+test = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "pytest-cov>=5.0",
+  "ruff>=0.7",
+  "mypy>=1.12",
+  "types-jsonschema>=4.23",
+  "types-pyyaml>=6.0",
+  "build>=1.2",
+  "grpcio-tools>=1.66",
+  "langgraph>=1.0",
+  "langgraph-sdk>=0.4",
+  "langgraph-checkpoint-postgres>=2.0",
+  "langchain>=1.0",
+  "deepagents>=0.5",
+  "psycopg[binary,pool]>=3.2",
+  "aiokafka>=0.12",
+  "a2a-sdk[fastapi,grpc,telemetry]>=1.0",
+  "opentelemetry-instrumentation-fastapi>=0.48b0",
+]
 
 [project.scripts]
 universal-runtime = "universal_runtime.bootstrap.cli:main"
