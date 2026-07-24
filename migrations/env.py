@@ -34,22 +34,25 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Any) -> None:
-    x_args = context.get_x_argument(as_dictionary=True)
-    connection.execute(
-        text("SELECT pg_advisory_xact_lock(:lock_key)"),
-        {
-            "lock_key": migration_lock_key(
-                x_args.get("application_id", "platform"),
-                x_args.get("environment", "default"),
-                "platform",
-            )
-        },
-    )
+    if not config.attributes.get("migration_lock_acquired", False):
+        x_args = context.get_x_argument(as_dictionary=True)
+        connection.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_key)"),
+            {
+                "lock_key": migration_lock_key(
+                    str(config.attributes.get("application_id") or x_args.get("application_id", "platform")),
+                    str(config.attributes.get("environment") or x_args.get("environment", "default")),
+                    "platform",
+                )
+            },
+        )
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
         include_schemas=True,
         version_table_schema=DEFAULT_SCHEMAS.core,
+        compare_type=True,
+        compare_server_default=True,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -67,6 +70,10 @@ async def run_async_migrations() -> None:
 
 
 def run_migrations_online() -> None:
+    supplied_connection = config.attributes.get("connection")
+    if supplied_connection is not None:
+        do_run_migrations(supplied_connection)
+        return
     asyncio.run(run_async_migrations())
 
 
