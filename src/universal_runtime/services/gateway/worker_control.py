@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
-from typing import Any, AsyncIterator
+from typing import Any
 
 import grpc
 from fastapi import FastAPI
@@ -14,10 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from universal_runtime.adapters.grpc.generated.runtime.v1 import worker_pb2, worker_pb2_grpc
 from universal_runtime.adapters.postgres.database import create_engine
-from universal_runtime.application.migration_coordination import (
-    ApplicationMigrationCoordinator,
-    MigrationClaim,
-)
+from universal_runtime.application.migration_coordination import ApplicationMigrationCoordinator
 
 
 class GatewayWorkerControlServicer(worker_pb2_grpc.WorkerControlServiceServicer):
@@ -296,8 +294,6 @@ def attach_worker_control(app: FastAPI) -> FastAPI:
     """Attach the internal gRPC control plane to a Gateway FastAPI app."""
 
     app.state.migration_done = False
-    # Registration is an internal gRPC contract. Remove the obsolete HTTP
-    # control-plane routes while the public LangGraph-compatible API remains.
     app.router.routes[:] = [
         route
         for route in app.router.routes
