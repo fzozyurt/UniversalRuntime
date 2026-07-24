@@ -8,7 +8,7 @@ router = APIRouter()
 
 
 @router.get(
-    "/",
+    "",
     response_model=list[HistoryItem],
     summary="List assistant history",
     description="List assistant history entries.",
