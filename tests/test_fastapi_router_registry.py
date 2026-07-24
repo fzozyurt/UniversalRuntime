@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from fastapi import FastAPI
 
 from universal_runtime.adapters.fastapi.router_registry import (
@@ -34,12 +35,12 @@ def test_folder_router_registration_generates_paths_tags_and_operation_ids() -> 
     assert history["operationId"] == "get_assistants_history"
 
 
-def test_deployment_identity_uses_runtime_environment(monkeypatch: object) -> None:
-    monkeypatch.setenv("UR_WORKSPACE_ID", "workspace-1")  # type: ignore[attr-defined]
-    monkeypatch.setenv("UR_PROJECT_ID", "project-1")  # type: ignore[attr-defined]
-    monkeypatch.setenv("UR_APPLICATION_ID", "application-1")  # type: ignore[attr-defined]
-    monkeypatch.setenv("UR_REVISION_ID", "revision-1")  # type: ignore[attr-defined]
-    monkeypatch.setenv("UR_DEPLOYMENT_ID", "deployment-1")  # type: ignore[attr-defined]
+def test_deployment_identity_uses_runtime_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("UR_WORKSPACE_ID", "workspace-1")
+    monkeypatch.setenv("UR_PROJECT_ID", "project-1")
+    monkeypatch.setenv("UR_APPLICATION_ID", "application-1")
+    monkeypatch.setenv("UR_REVISION_ID", "revision-1")
+    monkeypatch.setenv("UR_DEPLOYMENT_ID", "deployment-1")
 
     identity = deployment_identity(
         AssistantId.parse("assistant-1"),
