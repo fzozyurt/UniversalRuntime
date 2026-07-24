@@ -37,10 +37,11 @@ def register_router_package(
 ) -> None:
     """Discover every ``routes.py`` below a package and include it deterministically.
 
-    A route module may export either ``build_router(context, tag)`` or a direct
-    ``router`` object. Folder names become tags and, for direct application
-    routers, become URL prefixes by default. Gateway compatibility routers opt
-    out with ``AUTO_PREFIX = False`` to preserve LangGraph SDK paths exactly.
+    Every route folder must also expose ``schema.py``. A route module may export
+    either ``build_router(context, tag)`` or a direct ``router`` object. Folder
+    names become tags and, for direct application routers, URL prefixes. Gateway
+    compatibility routers opt out with ``AUTO_PREFIX = False`` so LangGraph SDK
+    paths remain unchanged.
     """
 
     package = importlib.import_module(package_name)
@@ -50,6 +51,7 @@ def register_router_package(
         runtime=getattr(app.state, "runtime", None),
     )
     for module in modules:
+        _require_schema_module(module)
         tag = folder_tag(module.__name__, package_name)
         builder = getattr(module, "build_router", None)
         direct_router = getattr(module, "router", None)
@@ -183,6 +185,18 @@ def _route_modules(package: ModuleType) -> list[ModuleType]:
         if info.name.endswith(".routes"):
             modules.append(importlib.import_module(info.name))
     return modules
+
+
+def _require_schema_module(route_module: ModuleType) -> None:
+    schema_module = route_module.__name__.removesuffix(".routes") + ".schema"
+    try:
+        importlib.import_module(schema_module)
+    except ModuleNotFoundError as exc:
+        if exc.name == schema_module:
+            raise RuntimeError(
+                f"every routes.py must have a sibling schema.py: {route_module.__name__}"
+            ) from exc
+        raise
 
 
 def _clone_route(
