@@ -34,8 +34,7 @@ def _parser() -> argparse.ArgumentParser:
         "inspect-graph", help="inspect an application graph entrypoint"
     )
     graph_inspect.add_argument("--entrypoint", required=True)
-    migrate = commands.add_parser("migrate", help="run application migrations")
-    migrate.add_argument("--config", required=True)
+    migrate = commands.add_parser("migrate", help="run Runtime platform migrations")
     migrate.add_argument("--application-id", required=True)
     migrate.add_argument("--environment", default="local")
     api = commands.add_parser("api", help="start the application API composition")
@@ -44,9 +43,9 @@ def _parser() -> argparse.ArgumentParser:
     api.add_argument("--host", default="127.0.0.1")
     api.add_argument("--port", type=int, default=8000)
     commands.add_parser("worker", help="start the runtime worker composition")
-    commands.add_parser("gateway", help="start the Gateway HTTP process")
-    commands.add_parser("dispatcher", help="start the dispatcher process")
+    commands.add_parser("gateway", help="start the Gateway HTTP and gRPC control processes")
     commands.add_parser("projector", help="start the event projector process")
+    commands.add_parser("all", help="start Gateway and Worker in one process")
     validate = commands.add_parser("validate-config", help="validate a runtime YAML file")
     validate.add_argument("path", type=Path)
     return parser
@@ -96,7 +95,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "inspect":
         try:
             asgi_descriptor = detect_asgi_application(
-                args.path, explicit_entrypoint=args.entrypoint, isolated_import=args.isolated_import
+                args.path,
+                explicit_entrypoint=args.entrypoint,
+                isolated_import=args.isolated_import,
             )
         except Exception as exc:
             print(str(exc))
@@ -124,7 +125,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             port=args.port,
         )
         return 0
-    if args.command in {"all", "gateway", "dispatcher", "projector", "worker"}:
+    if args.command in {"all", "gateway", "projector", "worker"}:
         service_main: Any
         if args.command == "all":
             from universal_runtime.services.all.main import main as service_main
@@ -162,7 +163,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             json.dumps(
                 {
                     "profile": "migrate",
-                    "config": args.config,
                     "application_id": args.application_id,
                     "environment": args.environment,
                 }
