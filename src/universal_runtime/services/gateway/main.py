@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import uvicorn
 from fastapi import FastAPI
 
@@ -10,7 +12,9 @@ from universal_runtime.services.gateway.worker_control import attach_worker_cont
 
 
 def create_gateway_app() -> FastAPI:
-    app = create_app()
+    app = create_app(
+        custom_http_target=os.environ.get("UR_APPLICATION_HTTP_TARGET"),
+    )
     attach_worker_control(app)
     attach_runtime_event_fanout(app)
     return app
