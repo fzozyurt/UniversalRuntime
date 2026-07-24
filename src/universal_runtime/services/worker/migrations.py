@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import importlib
 import os
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from universal_runtime.adapters.fastapi.migration_runner import (
     AlembicApplicationMigrationRunner,
