@@ -63,7 +63,9 @@ def test_platform_metadata_contains_contract_tables() -> None:
     assert "rt_exec.runs" in tables
     assert "rt_exec.outbox_events" in tables
     assert "rt_exec.inbox_events" in tables
-    assert "rt_exec.runtime_event_batches" in tables
+    # Runtime events are transient Kafka messages. LangGraph checkpoint/store is
+    # the authoritative framework history, so runtime_event_batches is obsolete.
+    assert "rt_exec.runtime_event_batches" not in tables
     assert "rt_exec.worker_leases" in tables
 
 
