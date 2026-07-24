@@ -14,9 +14,42 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install --upgrade pip
       - run: pip install -e '.[dev,langgraph,fastapi,a2a]'
-      - run: ruff check .
-      - run: ruff format --check .
-      - run: mypy src services
-      - run: python scripts/check_architecture.py
-      - run: python scripts/validate_contracts.py
-      - run: pytest -q --cov=src --cov=services --cov-report=term-missing --cov-fail-under=80
+      - run: mkdir -p quality-reports
+      - id: ruff
+        continue-on-error: true
+        run: ruff check . 2>&1 | tee quality-reports/ruff-check.txt
+      - id: format
+        continue-on-error: true
+        run: ruff format --check . 2>&1 | tee quality-reports/ruff-format.txt
+      - id: mypy
+        continue-on-error: true
+        run: mypy src services 2>&1 | tee quality-reports/mypy.txt
+      - id: architecture
+        continue-on-error: true
+        run: python scripts/check_architecture.py 2>&1 | tee quality-reports/architecture.txt
+      - id: contracts
+        continue-on-error: true
+        run: python scripts/validate_contracts.py 2>&1 | tee quality-reports/contracts.txt
+      - id: tests
+        continue-on-error: true
+        run: pytest -q --cov=src --cov=services --cov-report=term-missing --cov-fail-under=80 2>&1 | tee quality-reports/pytest.txt
+      - name: Upload quality reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-reports
+          path: quality-reports
+          if-no-files-found: error
+      - name: Fail when a quality gate failed
+        if: always()
+        env:
+          RUFF_OUTCOME: ${{ steps.ruff.outcome }}
+          FORMAT_OUTCOME: ${{ steps.format.outcome }}
+          MYPY_OUTCOME: ${{ steps.mypy.outcome }}
+          ARCHITECTURE_OUTCOME: ${{ steps.architecture.outcome }}
+          CONTRACTS_OUTCOME: ${{ steps.contracts.outcome }}
+          TESTS_OUTCOME: ${{ steps.tests.outcome }}
+        run: |
+          for outcome in "$RUFF_OUTCOME" "$FORMAT_OUTCOME" "$MYPY_OUTCOME" "$ARCHITECTURE_OUTCOME" "$CONTRACTS_OUTCOME" "$TESTS_OUTCOME"; do
+            test "$outcome" = success || exit 1
+          done
