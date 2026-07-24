@@ -5,8 +5,8 @@ Revises: 0002_application_migration_coordination
 Create Date: 2026-07-24
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0003_worker_registration"
 down_revision = "0002_application_migration_coordination"
@@ -17,7 +17,7 @@ _SCHEMA = "rt_exec"
 _TABLE = "workers"
 _INDEX = "ix_rt_exec_workers_application_status"
 
-_COLUMNS: tuple[sa.Column[object], ...] = (
+_COLUMNS = (
     sa.Column("workspace_key", sa.String(length=255), nullable=False, server_default="default"),
     sa.Column("application_id", sa.String(length=255), nullable=False, server_default="default"),
     sa.Column("revision_id", sa.String(length=255), nullable=False, server_default="unknown"),
