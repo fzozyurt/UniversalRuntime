@@ -931,9 +931,10 @@ def create_app(
         filter_dict = payload.get("filter")
         limit = max(0, min(int(cast("int | str", payload.get("limit", 10))), 1000))
         offset = max(0, int(cast("int | str", payload.get("offset", 0))))
-        return cast("dict[str, Any]", await searcher(
-            namespace_prefix, filter_dict=filter_dict, limit=limit, offset=offset
-        ))
+        return cast(
+            "dict[str, Any]",
+            await searcher(namespace_prefix, filter_dict=filter_dict, limit=limit, offset=offset),
+        )
 
     @app.post("/store/namespaces")
     async def store_list_namespaces(payload: JsonObject = Body(...)) -> dict[str, Any]:
@@ -946,9 +947,12 @@ def create_app(
         max_depth = payload.get("max_depth")
         limit = max(0, min(int(cast("int | str", payload.get("limit", 100))), 1000))
         offset = max(0, int(cast("int | str", payload.get("offset", 0))))
-        return cast("dict[str, Any]", await lister(
-            prefix=prefix, suffix=suffix, max_depth=max_depth, limit=limit, offset=offset
-        ))
+        return cast(
+            "dict[str, Any]",
+            await lister(
+                prefix=prefix, suffix=suffix, max_depth=max_depth, limit=limit, offset=offset
+            ),
+        )
 
     return app
 
@@ -1189,7 +1193,11 @@ def _sse_response(
 
         async def stream_from_queue() -> Any:
             if not native:
-                yield "event: metadata\ndata: " + orjson.dumps({"run_id": str(run_id)}).decode() + "\n\n"
+                yield (
+                    "event: metadata\ndata: "
+                    + orjson.dumps({"run_id": str(run_id)}).decode()
+                    + "\n\n"
+                )
             while True:
                 proto_event = await queue.get()
                 if proto_event is None:
@@ -1231,7 +1239,9 @@ def _sse_response(
 
     async def stream() -> Any:
         if not native:
-            yield "event: metadata\ndata: " + orjson.dumps({"run_id": str(run_id)}).decode() + "\n\n"
+            yield (
+                "event: metadata\ndata: " + orjson.dumps({"run_id": str(run_id)}).decode() + "\n\n"
+            )
         async for event in state.events.subscribe(run_id, after_sequence=after_sequence):
             if native:
                 event_name = str(event.type)

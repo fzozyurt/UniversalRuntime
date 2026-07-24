@@ -297,8 +297,7 @@ def attach_worker_control(app: FastAPI) -> FastAPI:
     app.router.routes[:] = [
         route
         for route in app.router.routes
-        if getattr(route, "path", None)
-        not in {"/internal/workers/register", "/internal/workers"}
+        if getattr(route, "path", None) not in {"/internal/workers/register", "/internal/workers"}
     ]
 
     @app.on_event("startup")

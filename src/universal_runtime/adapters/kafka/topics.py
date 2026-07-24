@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -44,12 +45,19 @@ class TopicNames:
             "audit": f"{root}.audit.events.v1",
             "deadletter": f"{root}.deadletter.v1",
         }
+        env_overrides = {}
+        for role in defaults:
+            val = os.environ.get(f"UR_TOPIC_{role.upper()}")
+            if val:
+                env_overrides[role] = val
         if overrides:
             unknown = set(overrides).difference(defaults)
             if unknown:
                 names = ", ".join(sorted(unknown))
                 raise ValueError(f"unknown topic override(s): {names}")
             defaults.update(overrides)
+        if env_overrides:
+            defaults.update(env_overrides)
         return cls(**defaults)
 
     @staticmethod
@@ -77,6 +85,9 @@ class TopicNames:
         *,
         environment: str = "local",
     ) -> str:
-        queue = "short_queue" if priority >= QueuePriority.NORMAL else "long_queue"
+        role = "short_queue" if priority >= QueuePriority.NORMAL else "long_queue"
+        override = os.environ.get(f"UR_TOPIC_{role.upper()}")
+        if override:
+            return override
         root = TopicNames.application_root(prefix, environment, application_id)
-        return f"{root}.runs.{queue}.v1"
+        return f"{root}.runs.{role}.v1"

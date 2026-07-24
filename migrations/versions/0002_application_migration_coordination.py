@@ -1,6 +1,6 @@
 """version application migration coordination
 
-Revision ID: 0002_application_migration_coordination
+Revision ID: 0002_worker_coordination
 Revises: 0001_platform_execution
 Create Date: 2026-07-24
 """
@@ -8,7 +8,7 @@ Create Date: 2026-07-24
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0002_application_migration_coordination"
+revision = "0002_worker_coordination"
 down_revision = "0001_platform_execution"
 branch_labels = None
 depends_on = None
@@ -36,8 +36,7 @@ def _constraint_names_for(columns: tuple[str, ...]) -> list[str]:
     return [
         str(constraint["name"])
         for constraint in _unique_constraints()
-        if constraint.get("name")
-        and set(constraint.get("column_names") or ()) == expected
+        if constraint.get("name") and set(constraint.get("column_names") or ()) == expected
     ]
 
 

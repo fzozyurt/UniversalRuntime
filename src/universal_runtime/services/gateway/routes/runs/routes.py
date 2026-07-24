@@ -13,8 +13,11 @@ AUTO_PREFIX = False
 
 
 def _is_run_route(path: str) -> bool:
-    return path == "/runs" or path.startswith("/runs/") or "/runs" in path or path.startswith(
-        "/api/v1/runs/"
+    return (
+        path == "/runs"
+        or path.startswith("/runs/")
+        or "/runs" in path
+        or path.startswith("/api/v1/runs/")
     )
 
 

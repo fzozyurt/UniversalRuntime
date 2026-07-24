@@ -274,8 +274,12 @@ class WorkerRow(AuditMixin, PlatformBase):
 
     id: Mapped[str] = mapped_column(String(255), primary_key=True)
     worker_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    workspace_key: Mapped[str] = mapped_column(String(255), nullable=False, server_default="default")
-    application_id: Mapped[str] = mapped_column(String(255), nullable=False, server_default="default")
+    workspace_key: Mapped[str] = mapped_column(
+        String(255), nullable=False, server_default="default"
+    )
+    application_id: Mapped[str] = mapped_column(
+        String(255), nullable=False, server_default="default"
+    )
     revision_id: Mapped[str] = mapped_column(String(255), nullable=False, server_default="unknown")
     deployment_id: Mapped[str] = mapped_column(String(255), nullable=False)
     target: Mapped[str] = mapped_column(String(512), nullable=False, server_default="")

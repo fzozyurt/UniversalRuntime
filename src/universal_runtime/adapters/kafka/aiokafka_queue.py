@@ -34,6 +34,7 @@ from universal_runtime.domain.identity import (
 from universal_runtime.ports.queue import RunCommandQueue
 
 from .partitioning import PartitionKey
+from .sasl_config import kafka_sasl_kwargs
 from .topics import TopicNames
 
 
@@ -139,6 +140,7 @@ class AioKafkaRunCommandQueue(RunCommandQueue):
             self._producer = AIOKafkaProducer(
                 bootstrap_servers=self._bootstrap_servers,
                 enable_idempotence=True,
+                **kafka_sasl_kwargs(),
             )
             await self._producer.start()
 
@@ -162,6 +164,7 @@ class AioKafkaRunCommandQueue(RunCommandQueue):
                 group_id=self._group_id,
                 enable_auto_commit=False,
                 auto_offset_reset="earliest",
+                **kafka_sasl_kwargs(),
             )
             try:
                 await instance.start()

@@ -37,18 +37,14 @@ class ThreadSearchRequest(BaseModel):
 class ThreadUpdateRequest(BaseModel):
     metadata: dict[str, Any]
 
-    model_config = ConfigDict(
-        json_schema_extra={"examples": [{"metadata": {"priority": "high"}}]}
-    )
+    model_config = ConfigDict(json_schema_extra={"examples": [{"metadata": {"priority": "high"}}]})
 
 
 class ThreadStateUpdateRequest(BaseModel):
     values: dict[str, Any]
     as_node: str | None = None
 
-    model_config = ConfigDict(
-        json_schema_extra={"examples": [{"values": {"messages": []}}]}
-    )
+    model_config = ConfigDict(json_schema_extra={"examples": [{"values": {"messages": []}}]})
 
 
 def response_model(route: APIRoute) -> Any | None:

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from fastapi import APIRouter
-
 from tests.fixtures.auto_api.assistants.history.schema import HistoryItem
 
 router = APIRouter()

@@ -7,6 +7,4 @@ class HistoryItem(BaseModel):
     version: int
     action: str
 
-    model_config = ConfigDict(
-        json_schema_extra={"examples": [{"version": 1, "action": "created"}]}
-    )
+    model_config = ConfigDict(json_schema_extra={"examples": [{"version": 1, "action": "created"}]})

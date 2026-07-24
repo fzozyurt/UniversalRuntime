@@ -17,8 +17,9 @@ def build_router(context: RouterContext, tag: str) -> APIRouter:
         context,
         tag=tag,
         contract=RouteContract(
-            predicate=lambda route: route.path == "/assistants"
-            or route.path.startswith("/assistants/"),
+            predicate=lambda route: (
+                route.path == "/assistants" or route.path.startswith("/assistants/")
+            ),
             response_model=schema.response_model,
             examples=schema.examples,
         ),

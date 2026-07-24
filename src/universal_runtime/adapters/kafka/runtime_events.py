@@ -7,6 +7,7 @@ from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 
 from universal_runtime.adapters.grpc.generated.runtime.v1 import execution_pb2
 
+from .sasl_config import kafka_sasl_kwargs
 from .topics import TopicNames
 
 RuntimeEventHandler = Callable[[Any], Awaitable[None]]
@@ -36,6 +37,7 @@ class AioKafkaRuntimeEventPublisher:
             self._producer = AIOKafkaProducer(
                 bootstrap_servers=self._bootstrap_servers,
                 enable_idempotence=True,
+                **kafka_sasl_kwargs(),
             )
             await self._producer.start()
         affinity = event.identity.thread_id or event.identity.run_id
@@ -89,6 +91,7 @@ class AioKafkaRuntimeEventSubscriber:
             group_id=self._group_id,
             enable_auto_commit=True,
             auto_offset_reset="latest",
+            **kafka_sasl_kwargs(),
         )
         await consumer.start()
         self._consumer = consumer

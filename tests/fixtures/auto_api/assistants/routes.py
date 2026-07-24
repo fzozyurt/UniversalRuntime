@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Body
-
 from tests.fixtures.auto_api.assistants.schema import AssistantCreate, AssistantRead
 
 router = APIRouter()

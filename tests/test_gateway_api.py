@@ -43,7 +43,7 @@ def test_gateway_compatibility_resources_are_not_native_enveloped() -> None:
 
     cancelled = client.post(f"/runs/{run['run_id']}/cancel")
     assert cancelled.status_code == 204
-    assert client.get("/assistants/search").status_code == 404
+    assert client.get("/assistants/nonexistent").status_code == 404
     assert client.post("/assistants/search").json()[0]["assistant_id"] == assistant["assistant_id"]
 
 

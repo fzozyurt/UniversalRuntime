@@ -40,8 +40,13 @@ def do_run_migrations(connection: Any) -> None:
             text("SELECT pg_advisory_xact_lock(:lock_key)"),
             {
                 "lock_key": migration_lock_key(
-                    str(config.attributes.get("application_id") or x_args.get("application_id", "platform")),
-                    str(config.attributes.get("environment") or x_args.get("environment", "default")),
+                    str(
+                        config.attributes.get("application_id")
+                        or x_args.get("application_id", "platform")
+                    ),
+                    str(
+                        config.attributes.get("environment") or x_args.get("environment", "default")
+                    ),
                     "platform",
                 )
             },

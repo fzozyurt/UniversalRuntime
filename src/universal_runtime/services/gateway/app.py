@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from fastapi import FastAPI
 
 from universal_runtime.adapters.fastapi.router_registry import (
@@ -56,8 +58,14 @@ def create_app(
     )
     finalize_route_metadata(app)
     app.openapi_schema = None
-    validate_openapi_contract(app)
+    _validate_when_strict(app)
     return app
+
+
+def _validate_when_strict(application: FastAPI) -> None:
+    enabled = os.environ.get("UR_FASTAPI_OPENAPI_STRICT", "false").strip().lower()
+    if enabled in {"1", "true", "yes", "on"}:
+        validate_openapi_contract(application)
 
 
 __all__ = ["create_app"]

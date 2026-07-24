@@ -30,9 +30,7 @@ def deployment_identity(
     )
     application = os.environ.get("UR_APPLICATION_ID", "default")
     revision = (
-        os.environ.get("UR_REVISION_ID")
-        or os.environ.get("ARTIFACT_VERSION")
-        or "development"
+        os.environ.get("UR_REVISION_ID") or os.environ.get("ARTIFACT_VERSION") or "development"
     )
     deployment = os.environ.get("UR_DEPLOYMENT_ID", f"{application}-local")
     return ExecutionIdentity(

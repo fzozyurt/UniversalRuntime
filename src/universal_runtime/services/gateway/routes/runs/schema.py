@@ -42,9 +42,7 @@ class RunCreateRequest(BaseModel):
 class RunCancelManyRequest(BaseModel):
     run_ids: list[str] = Field(default_factory=list)
 
-    model_config = ConfigDict(
-        json_schema_extra={"examples": [{"run_ids": ["run-01", "run-02"]}]}
-    )
+    model_config = ConfigDict(json_schema_extra={"examples": [{"run_ids": ["run-01", "run-02"]}]})
 
 
 def response_model(route: APIRoute) -> Any | None:

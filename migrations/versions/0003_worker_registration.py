@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "0003_worker_registration"
-down_revision = "0002_application_migration_coordination"
+down_revision = "0002_worker_coordination"
 branch_labels = None
 depends_on = None
 

@@ -81,6 +81,8 @@ def finalize_route_metadata(app: FastAPI) -> None:
     for route in app.routes:
         if not isinstance(route, APIRoute):
             continue
+        if len(route.tags) > 1:
+            route.tags = list(dict.fromkeys(route.tags))
         identifier = route.operation_id or operation_id(route)
         if identifier in seen:
             methods = "_".join(sorted(method.lower() for method in route.methods or {"get"}))

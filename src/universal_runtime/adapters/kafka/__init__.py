@@ -10,6 +10,7 @@ from universal_runtime.adapters.kafka.runtime_events import (
     AioKafkaRuntimeEventPublisher,
     AioKafkaRuntimeEventSubscriber,
 )
+from universal_runtime.adapters.kafka.sasl_config import kafka_sasl_kwargs
 from universal_runtime.adapters.kafka.topics import TopicNames
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "KafkaRuntimeEventPublisher",
     "PartitionKey",
     "TopicNames",
+    "kafka_sasl_kwargs",
 ]

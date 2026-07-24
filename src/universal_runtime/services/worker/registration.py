@@ -44,7 +44,9 @@ async def register_with_gateway(
 
     manifests = [adapter.manifest for adapter in adapters.values()]
     first = manifests[0]
-    profiles = sorted({profile for manifest in manifests for profile in manifest.supported_profiles})
+    profiles = sorted(
+        {profile for manifest in manifests for profile in manifest.supported_profiles}
+    )
     stream_modes = sorted(
         {mode for manifest in manifests for mode in manifest.supported_stream_modes}
     )
@@ -72,9 +74,7 @@ async def register_with_gateway(
             "workspace_key": os.environ.get("UR_WORKSPACE_KEY", "default"),
             "app_version": os.environ.get("ARTIFACT_VERSION", "development"),
             "run_topic": run_topic,
-            "migration_enabled": bool(
-                os.environ.get("UR_APPLICATION_MIGRATIONS_PATH", "").strip()
-            ),
+            "migration_enabled": bool(os.environ.get("UR_APPLICATION_MIGRATIONS_PATH", "").strip()),
             "migration_revision": os.environ.get(
                 "UR_APPLICATION_MIGRATION_REVISION",
                 "head",
