@@ -9,7 +9,9 @@ from universal_runtime.adapters.fastapi.router_registry import (
     register_router_package,
     validate_openapi_contract,
 )
+from universal_runtime.bootstrap.local import create_local_runtime
 from universal_runtime.domain.identity import AssistantId, RunId, ThreadId
+from universal_runtime.services.gateway.app import create_app
 from universal_runtime.services.gateway.scope import deployment_identity
 
 
@@ -33,6 +35,20 @@ def test_folder_router_registration_generates_paths_tags_and_operation_ids() -> 
     assert create["responses"]["200"]["content"]["application/json"]["schema"]
     assert history["tags"] == ["Assistants / History"]
     assert history["operationId"] == "get_assistants_history"
+
+
+def test_gateway_router_metadata_preserves_langgraph_sdk_paths() -> None:
+    app = create_app(create_local_runtime())
+    document = app.openapi()
+
+    assistant_create = document["paths"]["/assistants"]["post"]
+    run_stream = document["paths"]["/threads/{thread_id}/runs/stream"]["post"]
+
+    assert assistant_create["tags"] == ["Assistants"]
+    assert assistant_create["operationId"] == "post_assistants"
+    assert assistant_create["requestBody"]["content"]["application/json"]["examples"]
+    assert run_stream["tags"] == ["Runs"]
+    assert "/internal/workers/register" not in document["paths"]
 
 
 def test_deployment_identity_uses_runtime_environment(monkeypatch: pytest.MonkeyPatch) -> None:
