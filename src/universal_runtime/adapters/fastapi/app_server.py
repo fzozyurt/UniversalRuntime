@@ -54,7 +54,7 @@ def _load_and_register(entrypoint: str, *, router_package: str | None) -> Any:
             context=RouterContext(app=application),
         )
         finalize_route_metadata(application)
-        validate_openapi_contract(application)
+        _validate_when_strict(application)
         return application
 
     application = load_asgi(entrypoint)
@@ -69,9 +69,22 @@ def _load_and_register(entrypoint: str, *, router_package: str | None) -> Any:
         )
     if isinstance(application, FastAPI):
         finalize_route_metadata(application)
-        validate_openapi_contract(application)
+        _validate_when_strict(application)
         application.openapi_schema = None
     return application
+
+
+def _validate_when_strict(application: FastAPI) -> None:
+    """Keep application startup available while allowing CI/deploy strict gates.
+
+    Existing third-party or legacy FastAPI applications may not yet document every
+    request example. Set ``UR_FASTAPI_OPENAPI_STRICT=true`` in CI or deployment
+    validation jobs to make incomplete contracts fatal.
+    """
+
+    enabled = os.environ.get("UR_FASTAPI_OPENAPI_STRICT", "false").strip().lower()
+    if enabled in {"1", "true", "yes", "on"}:
+        validate_openapi_contract(application)
 
 
 def _title_from_package(package_name: str) -> str:
