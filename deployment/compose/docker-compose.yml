@@ -73,6 +73,28 @@ services:
     command: ["--application-id", "platform", "--environment", "${UR_KAFKA_ENVIRONMENT:-local}"]
     restart: "no"
 
+  application-api:
+    image: universal-runtime:local
+    pull_policy: never
+    environment:
+      UR_MODE: api
+      PYTHONPATH: /opt/universal-runtime:/opt/universal-runtime/applications/phase1-agent
+    command:
+      - --entrypoint
+      - phase1_agent.http
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/openapi.json', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   gateway-1: &gateway
     image: universal-runtime:local
     pull_policy: never
@@ -96,13 +118,17 @@ services:
       UR_WORKSPACE_KEY: ${UR_WORKSPACE_KEY:-default}
       UR_APPLICATION_ID: ${UR_APPLICATION_ID:-phase1_agent}
       UR_APPLICATION_NAME: ${UR_APPLICATION_NAME:-phase1-agent}
+      UR_REVISION_ID: ${UR_REVISION_ID:-development}
       UR_DEPLOYMENT_ID: ${UR_DEPLOYMENT_ID:-phase1-agent-local}
+      UR_APPLICATION_HTTP_TARGET: http://application-api:8000
       PYTHONPATH: /opt/universal-runtime:/opt/universal-runtime/applications/phase1-agent
     depends_on:
       migrate:
         condition: service_completed_successfully
       kafka-init:
         condition: service_completed_successfully
+      application-api:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "/usr/local/bin/runtime-healthcheck.py"]
       interval: 5s
